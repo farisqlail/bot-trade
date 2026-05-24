@@ -50,6 +50,7 @@ class OpportunityResponse(BaseModel):
     polymarket_bias_score: float
     polymarket_market_count: int
     analysis_text: str
+    model_name: Optional[str] = None
     analysis_id: Optional[int] = None
     created_at: Optional[str] = None
     paper_trade_id: Optional[int] = None
@@ -136,6 +137,7 @@ async def get_cached_opportunities(
             "polymarket_bias_score": float((a.market_data_snapshot or {}).get("polymarket_bias_score", 0)),
             "polymarket_market_count": int((a.market_data_snapshot or {}).get("polymarket_market_count", 0)),
             "analysis_text": a.analysis_text,
+            "model_name": a.model_name,
             "analysis_id": a.id,
             "created_at": a.created_at.isoformat() if a.created_at else None,
         }

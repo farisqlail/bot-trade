@@ -178,6 +178,25 @@ class AIService:
                     provider="deepseek_api" if self._use_deepseek_api else "ollama")
         return analysis
 
+    async def save_heuristic_result(self, symbol: str, opportunity: dict, market_data: dict) -> None:
+        """Save heuristic scan result to AIAnalysis table without an AI call."""
+        analysis = AIAnalysis(
+            symbol=symbol,
+            model_name="heuristic",
+            trend=opportunity.get("trend"),
+            sentiment=opportunity.get("sentiment"),
+            confidence=opportunity.get("confidence"),
+            analysis_text=opportunity.get("analysis_text", ""),
+            market_data_snapshot=market_data,
+            price_at_analysis=opportunity.get("price_at_analysis"),
+            recommended_action=opportunity.get("recommended_action"),
+            suggested_entry=opportunity.get("suggested_entry"),
+            suggested_sl=opportunity.get("suggested_sl"),
+            suggested_tp=opportunity.get("suggested_tp"),
+            processing_time_ms=0,
+        )
+        self.db.add(analysis)
+
     async def get_latest_analysis(self, symbol: str) -> Optional[AIAnalysis]:
         result = await self.db.execute(
             select(AIAnalysis)

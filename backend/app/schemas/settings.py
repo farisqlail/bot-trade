@@ -22,6 +22,9 @@ class SettingsUpdate(BaseModel):
     use_public_data_only: Optional[bool] = None
     scanner_watchlist: Optional[str] = None
     paper_balance: Optional[float] = None
+    scan_all_coins: Optional[bool] = None
+    max_scan_coins: Optional[int] = None
+    min_volume_filter: Optional[float] = None
     notification_settings: Optional[Dict[str, Any]] = None
 
 
@@ -46,5 +49,8 @@ class SettingsResponse(BaseModel):
     polymarket_api_passphrase: Optional[str] = None
     scanner_watchlist: list[str]
     paper_balance: float
+    scan_all_coins: bool = False
+    max_scan_coins: int = 50
+    min_volume_filter: float = 5_000_000.0
 
     model_config = {"from_attributes": True}

@@ -63,6 +63,43 @@ class ExchangeService:
             return values or self.DEFAULT_WATCHLIST
         return self.DEFAULT_WATCHLIST
 
+    async def get_all_tickers(self, min_turnover_usd: float = 0.0) -> list[dict]:
+        """One batch call → all active linear USDT perpetuals sorted by turnover."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{self.bybit_base_url}/v5/market/tickers",
+                params={"category": "linear"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+        items = (payload.get("result") or {}).get("list") or []
+        tickers = []
+        for data in items:
+            symbol = data.get("symbol", "")
+            if not symbol.endswith("USDT"):
+                continue
+            try:
+                price = float(data["lastPrice"])
+                change_24h = float(data.get("price24hPcnt") or 0.0) * 100
+                volume_24h = float(data.get("volume24h") or 0.0)
+                turnover_24h = float(data.get("turnover24h") or 0.0)
+            except (ValueError, KeyError):
+                continue
+            if price <= 0 or turnover_24h < min_turnover_usd:
+                continue
+            tickers.append({
+                "symbol": symbol,
+                "price": price,
+                "change_24h": change_24h,
+                "volume_24h": volume_24h,
+                "turnover_24h": turnover_24h,
+                "high_24h": float(data.get("highPrice24h") or 0.0),
+                "low_24h": float(data.get("lowPrice24h") or 0.0),
+            })
+        tickers.sort(key=lambda t: abs(t["change_24h"]), reverse=True)
+        return tickers
+
     async def get_ticker(self, symbol: str) -> dict:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(

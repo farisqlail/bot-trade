@@ -203,6 +203,14 @@ export default function AIAnalysis() {
                   <span className="rounded-full border border-gray-700 bg-gray-800 px-3 py-1 text-xs text-gray-300">
                     {item.trend}
                   </span>
+                  <span className={clsx(
+                    'rounded-full border px-3 py-1 text-xs font-medium',
+                    item.model_name === 'heuristic'
+                      ? 'border-gray-700 bg-gray-800/50 text-gray-500'
+                      : 'border-indigo-500/30 bg-indigo-500/10 text-indigo-300'
+                  )}>
+                    {item.model_name === 'heuristic' ? 'Heuristic' : 'AI'}
+                  </span>
                   {item.paper_trade_id ? (
                     <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-300">
                       Paper Trade #{item.paper_trade_id}
@@ -260,7 +268,9 @@ export default function AIAnalysis() {
               </div>
 
               <div className="mt-4 rounded-xl border border-gray-800 bg-gray-950/60 p-4">
-                <p className="text-xs uppercase tracking-[0.25em] text-gray-500">AI Notes</p>
+                <p className="text-xs uppercase tracking-[0.25em] text-gray-500">
+                  {item.model_name === 'heuristic' ? 'Heuristic Analysis' : 'AI Analysis'}
+                </p>
                 <p className="mt-2 text-sm leading-6 text-gray-300">{item.analysis_text}</p>
               </div>
             </div>

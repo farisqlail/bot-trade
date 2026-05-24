@@ -25,6 +25,9 @@ export default function BotSettings() {
           use_public_data_only: res.data.use_public_data_only,
           scanner_watchlist: (res.data.scanner_watchlist || []).join(', '),
           paper_balance: res.data.paper_balance,
+          scan_all_coins: res.data.scan_all_coins ?? false,
+          max_scan_coins: res.data.max_scan_coins ?? 50,
+          min_volume_filter: res.data.min_volume_filter ?? 5000000,
           polymarket_api_key: res.data.polymarket_api_key || '',
           polymarket_api_secret: '',
           polymarket_api_passphrase: '',
@@ -152,17 +155,32 @@ export default function BotSettings() {
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
           <h3 className="font-semibold mb-4">Scanner Config</h3>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Field
-              label="Watchlist"
-              name="scanner_watchlist"
-              placeholder="BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT"
-            />
+          <Toggle label="Scan All Listed Coins (override watchlist)" name="scan_all_coins" />
+          {form.scan_all_coins ? (
+            <div className="mt-4 space-y-4">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <Field label="Max Coins to Scan" name="max_scan_coins" type="number" step="5" placeholder="50" />
+                <Field label="Min 24h Volume USD" name="min_volume_filter" type="number" step="1000000" placeholder="5000000" />
+              </div>
+              <p className="text-xs text-emerald-400">
+                Scanner ambil semua USDT perpetuals dari Bybit (1 API call), filter volume ≥ min, sort by |%change 24h| terbesar, lalu scan top N coin.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              <Field
+                label="Watchlist"
+                name="scanner_watchlist"
+                placeholder="BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT"
+              />
+              <p className="text-xs text-gray-500">
+                Scanner baca data real Bybit untuk coin di watchlist. Pisahkan coin dengan koma.
+              </p>
+            </div>
+          )}
+          <div className="mt-4">
             <Field label="Paper Balance" name="paper_balance" type="number" step="100" />
           </div>
-          <p className="mt-3 text-xs text-gray-500">
-            Scanner baca data real Bybit untuk coin di watchlist. Pisahkan coin dengan koma.
-          </p>
         </div>
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">

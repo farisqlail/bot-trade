@@ -129,7 +129,20 @@ class ScannerService:
         execute_paper: bool = False,
     ) -> list[dict]:
         settings = await self._get_settings(user_id)
-        watchlist = self.exchange_svc.get_watchlist(settings.scanner_watchlist if settings else None)
+
+        if settings and settings.scan_all_coins:
+            min_vol = settings.min_volume_filter
+            max_coins = settings.max_scan_coins
+            all_tickers = await self.exchange_svc.get_all_tickers(min_turnover_usd=min_vol)
+            watchlist = [t["symbol"] for t in all_tickers[:max_coins]]
+            logger.info(
+                "scanner_all_coins_mode",
+                total_eligible=len(all_tickers),
+                scanning=len(watchlist),
+                min_volume_usd=min_vol,
+            )
+        else:
+            watchlist = self.exchange_svc.get_watchlist(settings.scanner_watchlist if settings else None)
 
         fetch_sem = asyncio.Semaphore(3)
 
@@ -156,6 +169,11 @@ class ScannerService:
 
         opportunities.sort(key=lambda item: abs(item["score"]), reverse=True)
 
+        # Save heuristic results for ALL scanned symbols (no AI cost).
+        # AI will create newer records for top N, which the cached endpoint will prefer.
+        for opp in opportunities:
+            await self.ai_svc.save_heuristic_result(opp["symbol"], opp, opp.get("market_data", {}))
+
         if deep_analysis and settings and settings.ai_analysis_enabled:
             async def _run_ai(opportunity: dict):
                 try:
@@ -180,7 +198,8 @@ class ScannerService:
                         f"{opportunity['analysis_text']} AI fallback active because provider failed."
                     )
 
-            await asyncio.gather(*[_run_ai(opp) for opp in opportunities[:3]])
+            ai_limit = 5 if (settings and settings.scan_all_coins) else 3
+            await asyncio.gather(*[_run_ai(opp) for opp in opportunities[:ai_limit]])
 
         if execute_paper and settings and settings.auto_trade:
             for opportunity in opportunities[:2]:

@@ -85,3 +85,45 @@ class Settings(Base):
         except (TypeError, ValueError):
             payload["paper_balance"] = 10000.0
         self.notification_settings = payload
+
+    @property
+    def scan_all_coins(self) -> bool:
+        return bool((self.notification_settings or {}).get("scan_all_coins", False))
+
+    @scan_all_coins.setter
+    def scan_all_coins(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["scan_all_coins"] = bool(value)
+        self.notification_settings = payload
+
+    @property
+    def max_scan_coins(self) -> int:
+        try:
+            return int((self.notification_settings or {}).get("max_scan_coins", 50))
+        except (TypeError, ValueError):
+            return 50
+
+    @max_scan_coins.setter
+    def max_scan_coins(self, value: int):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["max_scan_coins"] = max(5, int(value))
+        except (TypeError, ValueError):
+            payload["max_scan_coins"] = 50
+        self.notification_settings = payload
+
+    @property
+    def min_volume_filter(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("min_volume_filter", 5_000_000.0))
+        except (TypeError, ValueError):
+            return 5_000_000.0
+
+    @min_volume_filter.setter
+    def min_volume_filter(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["min_volume_filter"] = max(0.0, float(value))
+        except (TypeError, ValueError):
+            payload["min_volume_filter"] = 5_000_000.0
+        self.notification_settings = payload
