@@ -13,7 +13,7 @@ from app.core.exceptions import (
     TradingBotException, trading_bot_exception_handler,
     validation_exception_handler, generic_exception_handler,
 )
-from app.routers import auth, dashboard, trades, ai_analysis, risk, bot, tuning
+from app.routers import auth, dashboard, trades, ai_analysis, risk, bot, tuning, chart
 
 setup_logging()
 
@@ -54,6 +54,7 @@ app.include_router(ai_analysis.router, prefix=API_PREFIX)
 app.include_router(risk.router, prefix=API_PREFIX)
 app.include_router(bot.router, prefix=API_PREFIX)
 app.include_router(tuning.router, prefix=API_PREFIX)
+app.include_router(chart.router, prefix=API_PREFIX)
 
 if settings.PROMETHEUS_ENABLED:
     metrics_app = make_asgi_app()

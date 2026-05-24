@@ -6,6 +6,7 @@ import TradeHistory from './pages/TradeHistory'
 import AIAnalysis from './pages/AIAnalysis'
 import RiskSettings from './pages/RiskSettings'
 import BotSettings from './pages/BotSettings'
+import TradingChart from './pages/TradingChart'
 import Login from './pages/Login'
 import Register from './pages/Register'
 
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="ai-analysis" element={<AIAnalysis />} />
           <Route path="risk-settings" element={<RiskSettings />} />
           <Route path="bot-settings" element={<BotSettings />} />
+          <Route path="chart" element={<TradingChart />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -3,7 +3,21 @@
     "allow": [
       "Bash(python -m pytest tests/test_telegram_commands.py -v)",
       "PowerShell(docker exec tradingbot_backend *)",
-      "PowerShell(docker cp *)"
+      "PowerShell(docker cp *)",
+      "Bash(npm install *)",
+      "Bash(python -c \"from app.routers import chart; print\\('chart router OK'\\)\")",
+      "Bash(pip show *)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(python -m py_compile \"C:\\\\Users\\\\faris\\\\trading-bot\\\\backend\\\\app\\\\routers\\\\chart.py\")",
+      "Bash(npm --version)",
+      "Read(//usr/local/bin/**)",
+      "Bash(/usr/local/bin/npm --version)",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(npm *)",
+      "PowerShell(npm run *)",
+      "PowerShell(netstat *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Test-Path \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\node_modules\"; \\(Get-ChildItem \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\node_modules\" | Measure-Object\\).Count)"
     ]
   }
 }

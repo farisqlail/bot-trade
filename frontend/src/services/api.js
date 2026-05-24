@@ -92,4 +92,14 @@ export const tuningApi = {
   runManual: () => api.post('/tuning/run'),
 }
 
+export const chartApi = {
+  getBundle: (symbol, interval = '60', limit = 200) =>
+    api.get(`/chart/${symbol}/analysis`, { params: { interval, limit } }),
+  getCandles: (symbol, interval = '60', limit = 200) =>
+    api.get(`/chart/${symbol}/candles`, { params: { interval, limit } }),
+  getSignal: (symbol) => api.get(`/chart/${symbol}/signal`),
+  getActiveTrade: (symbol) => api.get(`/chart/${symbol}/active-trade`),
+  getWatchlist: (limit = 5) => api.get('/chart/watchlist/ranking', { params: { limit } }),
+}
+
 export default api
