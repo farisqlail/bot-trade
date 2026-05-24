@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_telegram_commands.py -v)",
+      "PowerShell(docker exec tradingbot_backend *)",
+      "PowerShell(docker cp *)"
+    ]
+  }
+}

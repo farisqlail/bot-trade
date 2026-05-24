@@ -84,4 +84,12 @@ export const botApi = {
   testTelegram: () => api.post('/bot/test-telegram'),
 }
 
+export const tuningApi = {
+  getHistory: (limit = 20) => api.get('/tuning/history', { params: { limit } }),
+  getPending: () => api.get('/tuning/pending'),
+  approve: (id) => api.post(`/tuning/${id}/approve`),
+  reject: (id) => api.post(`/tuning/${id}/reject`),
+  runManual: () => api.post('/tuning/run'),
+}
+
 export default api

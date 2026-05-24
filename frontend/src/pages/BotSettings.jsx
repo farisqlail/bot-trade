@@ -97,9 +97,9 @@ export default function BotSettings() {
       <button
         type="button"
         onClick={() => setForm((f) => ({ ...f, [name]: !f[name] }))}
-        className={`relative w-10 h-5 rounded-full transition-colors ${form[name] ? 'bg-indigo-600' : 'bg-gray-700'}`}
+        className={`relative w-10 h-5 rounded-full transition-colors p-0 overflow-hidden ${form[name] ? 'bg-indigo-600' : 'bg-gray-700'}`}
       >
-        <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form[name] ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        <span className={`absolute left-0 top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form[name] ? 'translate-x-5' : 'translate-x-0.5'}`} />
       </button>
     </div>
   )

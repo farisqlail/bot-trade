@@ -25,6 +25,9 @@ class SettingsUpdate(BaseModel):
     scan_all_coins: Optional[bool] = None
     max_scan_coins: Optional[int] = None
     min_volume_filter: Optional[float] = None
+    auto_tuning_enabled: Optional[bool] = None
+    tuning_frequency: Optional[str] = None
+    require_manual_approval_for_tuning: Optional[bool] = None
     notification_settings: Optional[Dict[str, Any]] = None
 
 
@@ -52,5 +55,8 @@ class SettingsResponse(BaseModel):
     scan_all_coins: bool = False
     max_scan_coins: int = 50
     min_volume_filter: float = 5_000_000.0
+    auto_tuning_enabled: bool = False
+    tuning_frequency: str = "weekly"
+    require_manual_approval_for_tuning: bool = True
 
     model_config = {"from_attributes": True}

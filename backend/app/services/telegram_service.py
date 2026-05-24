@@ -95,6 +95,102 @@ class TelegramService:
         for chunk in chunks:
             await self.send_message(chunk)
 
+    async def send_message_with_keyboard(self, text: str, inline_keyboard: list) -> int | None:
+        """Send message with inline keyboard. Returns message_id or None on failure."""
+        if not self.enabled:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.BASE_URL}/bot{self.bot_token}/sendMessage",
+                    json={
+                        "chat_id": self.chat_id,
+                        "text": text,
+                        "parse_mode": "HTML",
+                        "reply_markup": {"inline_keyboard": inline_keyboard},
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                msg_id = data.get("result", {}).get("message_id")
+                logger.info("telegram_keyboard_message_sent", message_id=msg_id)
+                return msg_id
+        except Exception as exc:
+            logger.warning("telegram_keyboard_send_failed", error=str(exc))
+            return None
+
+    async def edit_message_text(self, message_id: int, text: str) -> bool:
+        if not self.enabled:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.BASE_URL}/bot{self.bot_token}/editMessageText",
+                    json={
+                        "chat_id": self.chat_id,
+                        "message_id": message_id,
+                        "text": text,
+                        "parse_mode": "HTML",
+                    },
+                )
+                resp.raise_for_status()
+                return True
+        except Exception as exc:
+            logger.warning("telegram_edit_message_failed", error=str(exc))
+            return False
+
+    async def answer_callback_query(self, callback_query_id: str, text: str = "") -> bool:
+        if not self.enabled:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.BASE_URL}/bot{self.bot_token}/answerCallbackQuery",
+                    json={"callback_query_id": callback_query_id, "text": text},
+                )
+                resp.raise_for_status()
+                return True
+        except Exception as exc:
+            logger.warning("telegram_answer_callback_failed", error=str(exc))
+            return False
+
+    async def notify_tuning_recommendation(
+        self,
+        tuning_id: int,
+        approval_token: str,
+        old_risk: float,
+        new_risk: float,
+        direction: str,
+        reason: str,
+        metrics: dict,
+    ) -> int | None:
+        """Send tuning recommendation with Approve/Reject inline buttons. Returns message_id."""
+        if not self.enabled:
+            logger.warning("telegram_disabled_skip_tuning_notify")
+            return None
+
+        direction_emoji = "📈" if direction == "increase" else "📉"
+        win_rate = metrics.get("win_rate", 0)
+        pf = metrics.get("profit_factor", 0)
+        total = metrics.get("total_trades", 0)
+
+        text = (
+            f"🔧 <b>Auto-Tuning Recommendation</b>\n\n"
+            f"{direction_emoji} Risk per trade: <code>{old_risk:.2f}%</code> → <code>{new_risk:.2f}%</code>\n\n"
+            f"📊 <b>Performance ({metrics.get('period_days', 30)}d):</b>\n"
+            f"   Trades: {total}  ·  Win rate: {win_rate*100:.0f}%\n"
+            f"   Profit factor: {pf:.2f}  ·  Max consec losses: {metrics.get('max_consecutive_losses', 0)}\n\n"
+            f"💬 <i>{reason}</i>\n\n"
+            f"Approve or reject this change:"
+        )
+
+        keyboard = [[
+            {"text": "✅ Approve", "callback_data": f"tuning_approve_{approval_token}"},
+            {"text": "❌ Reject", "callback_data": f"tuning_reject_{approval_token}"},
+        ]]
+
+        return await self.send_message_with_keyboard(text, keyboard)
+
     async def notify_trade_opened(self, symbol: str, direction: str, entry_price: float,
                                    stop_loss: float, take_profit: float) -> None:
         if not self.enabled:

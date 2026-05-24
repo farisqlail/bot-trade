@@ -87,6 +87,37 @@ class Settings(Base):
         self.notification_settings = payload
 
     @property
+    def auto_tuning_enabled(self) -> bool:
+        return bool((self.notification_settings or {}).get("auto_tuning_enabled", False))
+
+    @auto_tuning_enabled.setter
+    def auto_tuning_enabled(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["auto_tuning_enabled"] = bool(value)
+        self.notification_settings = payload
+
+    @property
+    def tuning_frequency(self) -> str:
+        return str((self.notification_settings or {}).get("tuning_frequency", "weekly"))
+
+    @tuning_frequency.setter
+    def tuning_frequency(self, value: str):
+        allowed = {"daily", "weekly", "monthly"}
+        payload = dict(self.notification_settings or {})
+        payload["tuning_frequency"] = value if value in allowed else "weekly"
+        self.notification_settings = payload
+
+    @property
+    def require_manual_approval_for_tuning(self) -> bool:
+        return bool((self.notification_settings or {}).get("require_manual_approval_for_tuning", True))
+
+    @require_manual_approval_for_tuning.setter
+    def require_manual_approval_for_tuning(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["require_manual_approval_for_tuning"] = bool(value)
+        self.notification_settings = payload
+
+    @property
     def scan_all_coins(self) -> bool:
         return bool((self.notification_settings or {}).get("scan_all_coins", False))
 

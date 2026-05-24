@@ -71,6 +71,74 @@ def scan_market_opportunities(self):
         raise self.retry(exc=exc, countdown=60)
 
 
+@celery_app.task(name="app.workers.tasks.run_auto_tuning", bind=True)
+def run_auto_tuning(self):
+    async def _run():
+        from sqlalchemy import select
+        from app.database import AsyncSessionLocal
+        from app.models.settings import Settings
+        from app.services.tuning_service import TuningService
+        from app.services.telegram_service import TelegramService
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Settings).where(Settings.ai_analysis_enabled == True)
+            )
+            all_settings = result.scalars().all()
+            tg = TelegramService()
+
+            for s in all_settings:
+                try:
+                    svc = TuningService(db)
+                    record = await svc.run_tuning(s.user_id)
+
+                    if record and record.status == "pending":
+                        msg_id = await tg.notify_tuning_recommendation(
+                            tuning_id=record.id,
+                            approval_token=record.approval_token,
+                            old_risk=record.old_risk_percent,
+                            new_risk=record.new_risk_percent,
+                            direction=record.change_direction or "no_change",
+                            reason=record.reason or "",
+                            metrics=record.metrics_snapshot or {},
+                        )
+                        if msg_id:
+                            record.telegram_message_id = msg_id
+                    elif record and record.status == "auto_applied":
+                        await tg.send_message(
+                            f"⚙️ <b>Auto-Tuning Applied</b>\n"
+                            f"Risk per trade: <code>{record.old_risk_percent:.2f}%</code> → <code>{record.new_risk_percent:.2f}%</code>\n"
+                            f"<i>{record.reason}</i>"
+                        )
+                except Exception as exc:
+                    logger.error("auto_tuning_user_error", user_id=s.user_id, error=str(exc))
+
+            await db.commit()
+
+    try:
+        run_async(_run())
+    except Exception as exc:
+        logger.error("auto_tuning_task_error", error=str(exc))
+        raise self.retry(exc=exc, countdown=120)
+
+
+@celery_app.task(name="app.workers.tasks.process_telegram_callbacks", bind=True)
+def process_telegram_callbacks(self):
+    async def _run():
+        from app.database import AsyncSessionLocal
+        from app.services.telegram_callback_service import process_telegram_callbacks as _process
+
+        async with AsyncSessionLocal() as db:
+            count = await _process(db)
+            if count:
+                logger.info("telegram_callbacks_processed", count=count)
+
+    try:
+        run_async(_run())
+    except Exception as exc:
+        logger.error("process_telegram_callbacks_error", error=str(exc))
+
+
 @celery_app.task(name="app.workers.tasks.check_risk_limits", bind=True)
 def check_risk_limits(self):
     async def _run():
