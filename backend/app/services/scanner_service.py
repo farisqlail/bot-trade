@@ -1,0 +1,197 @@
+import asyncio
+from datetime import datetime, timezone
+
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.settings import Settings
+from app.models.trade import Trade, TradeStatus, TradeDirection
+from app.schemas.trade import TradeCreate
+from app.services.ai_service import AIService
+from app.services.exchange_service import ExchangeService
+from app.services.trading_service import TradingService
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+class ScannerService:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+        self.exchange_svc = ExchangeService()
+        self.ai_svc = AIService(db)
+        self.trading_svc = TradingService(db)
+
+    async def _get_settings(self, user_id: int) -> Settings | None:
+        result = await self.db.execute(select(Settings).where(Settings.user_id == user_id))
+        return result.scalar_one_or_none()
+
+    def _heuristic_signal(self, symbol: str, market_data: dict) -> dict:
+        candles = market_data.get("candles") or []
+        current_price = float(market_data.get("price") or 0.0)
+        if len(candles) >= 2 and candles[0]["close"]:
+            momentum = (candles[-1]["close"] - candles[0]["close"]) / candles[0]["close"]
+        else:
+            momentum = 0.0
+
+        change_score = float(market_data.get("change_24h") or 0.0) / 100.0
+        sentiment_score = float(market_data.get("polymarket_bias_score") or 0.0)
+        score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
+
+        if score >= 0.03:
+            action = "BUY"
+            sentiment = "STRONG_BUY" if score >= 0.07 else "BUY"
+            trend = "BULLISH"
+            suggested_sl = current_price * 0.985
+            suggested_tp = current_price * 1.03
+        elif score <= -0.03:
+            action = "SELL"
+            sentiment = "STRONG_SELL" if score <= -0.07 else "SELL"
+            trend = "BEARISH"
+            suggested_sl = current_price * 1.015
+            suggested_tp = current_price * 0.97
+        else:
+            action = "HOLD"
+            sentiment = "HOLD"
+            trend = "SIDEWAYS"
+            suggested_sl = current_price * 0.99 if current_price else 0.0
+            suggested_tp = current_price * 1.01 if current_price else 0.0
+
+        summary = market_data.get("polymarket_markets") or []
+        top_summary = "; ".join(
+            f"{item['question']} (yes {item['yes_price']:.2f})"
+            for item in summary[:2]
+        ) or "No strong Polymarket market context found."
+
+        return {
+            "symbol": symbol,
+            "score": round(score, 4),
+            "trend": trend,
+            "sentiment": sentiment,
+            "recommended_action": action,
+            "suggested_entry": round(current_price, 6),
+            "suggested_sl": round(suggested_sl, 6),
+            "suggested_tp": round(suggested_tp, 6),
+            "price_at_analysis": round(current_price, 6),
+            "change_24h": round(float(market_data.get("change_24h") or 0.0), 4),
+            "volume_24h": float(market_data.get("volume_24h") or 0.0),
+            "polymarket_bias_score": round(float(market_data.get("polymarket_bias_score") or 0.0), 4),
+            "polymarket_market_count": int(market_data.get("polymarket_market_count") or 0),
+            "analysis_text": f"Momentum {momentum:.4f}; 24h change {change_score:.4f}; Polymarket bias {sentiment_score:.4f}. {top_summary}",
+            "confidence": min(abs(score) * 8, 0.95),
+            "market_data": market_data,
+        }
+
+    async def _open_paper_trade_if_needed(self, user_id: int, settings: Settings, opportunity: dict):
+        action = opportunity["recommended_action"]
+        if action not in {"BUY", "SELL"}:
+            return None
+
+        result = await self.db.execute(
+            select(Trade).where(
+                and_(
+                    Trade.user_id == user_id,
+                    Trade.symbol == opportunity["symbol"],
+                    Trade.status == TradeStatus.OPEN,
+                )
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            return existing
+
+        trade_data = TradeCreate(
+            symbol=opportunity["symbol"],
+            direction=TradeDirection.LONG if action == "BUY" else TradeDirection.SHORT,
+            entry_price=opportunity["suggested_entry"],
+            stop_loss=opportunity["suggested_sl"],
+            take_profit=opportunity["suggested_tp"],
+            risk_percent=settings.risk_percent,
+            leverage=settings.leverage,
+            notes="auto_paper_trade:polymarket_sentiment+bybit_data",
+        )
+        trade = await self.trading_svc.create_trade(user_id, trade_data, settings.paper_balance)
+        from app.services.telegram_service import TelegramService
+        direction_str = "LONG" if action == "BUY" else "SHORT"
+        await TelegramService().notify_trade_opened(
+            symbol=opportunity["symbol"],
+            direction=direction_str,
+            entry_price=opportunity["suggested_entry"],
+            stop_loss=opportunity["suggested_sl"],
+            take_profit=opportunity["suggested_tp"],
+        )
+        return trade
+
+    async def scan_opportunities(
+        self,
+        user_id: int,
+        deep_analysis: bool = True,
+        execute_paper: bool = False,
+    ) -> list[dict]:
+        settings = await self._get_settings(user_id)
+        watchlist = self.exchange_svc.get_watchlist(settings.scanner_watchlist if settings else None)
+
+        fetch_sem = asyncio.Semaphore(3)
+
+        async def _fetch_symbol(symbol: str):
+            async with fetch_sem:
+                for attempt in range(3):
+                    try:
+                        return symbol, await self.exchange_svc.get_market_data(symbol)
+                    except Exception as exc:
+                        if attempt == 2:
+                            logger.warning("scanner_symbol_fetch_failed", symbol=symbol, error=str(exc))
+                            return symbol, None
+                        await asyncio.sleep(1.5 ** attempt)
+
+        fetch_results = await asyncio.gather(*[_fetch_symbol(s) for s in watchlist])
+        opportunities = [
+            self._heuristic_signal(symbol, market_data)
+            for symbol, market_data in fetch_results
+            if market_data is not None
+        ]
+
+        if not opportunities:
+            raise ValueError("No market data available from Bybit for the current watchlist")
+
+        opportunities.sort(key=lambda item: abs(item["score"]), reverse=True)
+
+        if deep_analysis and settings and settings.ai_analysis_enabled:
+            async def _run_ai(opportunity: dict):
+                try:
+                    analysis = await self.ai_svc.analyze_market(opportunity["symbol"], opportunity["market_data"])
+                    opportunity.update(
+                        {
+                            "trend": analysis.trend or opportunity["trend"],
+                            "sentiment": analysis.sentiment or opportunity["sentiment"],
+                            "recommended_action": analysis.recommended_action or opportunity["recommended_action"],
+                            "suggested_entry": analysis.suggested_entry or opportunity["suggested_entry"],
+                            "suggested_sl": analysis.suggested_sl or opportunity["suggested_sl"],
+                            "suggested_tp": analysis.suggested_tp or opportunity["suggested_tp"],
+                            "analysis_text": analysis.analysis_text,
+                            "confidence": analysis.confidence if analysis.confidence is not None else opportunity["confidence"],
+                            "analysis_id": analysis.id,
+                            "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
+                        }
+                    )
+                except Exception as exc:
+                    logger.warning("scanner_ai_analysis_failed", symbol=opportunity["symbol"], error=str(exc))
+                    opportunity["analysis_text"] = (
+                        f"{opportunity['analysis_text']} AI fallback active because provider failed."
+                    )
+
+            await asyncio.gather(*[_run_ai(opp) for opp in opportunities[:3]])
+
+        if execute_paper and settings and settings.auto_trade:
+            for opportunity in opportunities[:2]:
+                try:
+                    trade = await self._open_paper_trade_if_needed(user_id, settings, opportunity)
+                    if trade:
+                        opportunity["paper_trade_id"] = trade.id
+                except Exception as exc:
+                    logger.warning("scanner_paper_trade_failed", symbol=opportunity["symbol"], error=str(exc))
+
+        for opportunity in opportunities:
+            opportunity.pop("market_data", None)
+
+        return opportunities
