@@ -38,15 +38,15 @@ class ScannerService:
         sentiment_score = float(market_data.get("polymarket_bias_score") or 0.0)
         score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
 
-        if score >= 0.03:
+        if score >= 0.012:
             action = "BUY"
-            sentiment = "STRONG_BUY" if score >= 0.07 else "BUY"
+            sentiment = "STRONG_BUY" if score >= 0.04 else "BUY"
             trend = "BULLISH"
             suggested_sl = current_price * 0.985
             suggested_tp = current_price * 1.03
-        elif score <= -0.03:
+        elif score <= -0.012:
             action = "SELL"
-            sentiment = "STRONG_SELL" if score <= -0.07 else "SELL"
+            sentiment = "STRONG_SELL" if score <= -0.04 else "SELL"
             trend = "BEARISH"
             suggested_sl = current_price * 1.015
             suggested_tp = current_price * 0.97
@@ -81,6 +81,69 @@ class ScannerService:
             "confidence": min(abs(score) * 8, 0.95),
             "market_data": market_data,
         }
+
+    async def _execute_defi_trade(self, user_id: int, settings: Settings, opportunity: dict) -> dict | None:
+        from app.services.defi_service import DeFiService
+
+        symbol = opportunity["symbol"]
+        action = opportunity.get("recommended_action")
+        is_buy = action in {"BUY", "STRONG_BUY"}
+        is_sell = action in {"SELL", "STRONG_SELL"}
+        if not is_buy and not is_sell:
+            return None
+
+        service = DeFiService(network=settings.defi_network or "arbitrum")
+        token_address = service.get_token_address(symbol)
+        if not token_address:
+            return None
+
+        try:
+            token_raw, _ = await service.get_token_balance(settings.defi_wallet_address, token_address)
+        except Exception as exc:
+            logger.warning("defi_balance_check_failed", symbol=symbol, error=str(exc))
+            return None
+
+        in_position = token_raw > 0
+        result = None
+
+        try:
+            if is_buy and not in_position:
+                balance_info = await service.get_balance(settings.defi_wallet_address)
+                usdc_available = balance_info["usdc_balance"]
+                trade_amount = round(usdc_available * (settings.defi_trade_percent / 100), 2)
+                if trade_amount < 0.5:
+                    logger.info("defi_skip_buy_low_usdc", user_id=user_id, symbol=symbol, usdc=usdc_available)
+                    return None
+                result = await service.swap_usdc_to_token(
+                    settings.defi_wallet_private_key_encrypted,
+                    token_address,
+                    trade_amount,
+                    slippage=settings.defi_slippage / 100,
+                )
+            elif is_sell and in_position:
+                result = await service.sell_all_to_usdc(
+                    settings.defi_wallet_private_key_encrypted,
+                    token_address,
+                    slippage=settings.defi_slippage / 100,
+                )
+        except Exception as exc:
+            logger.error("defi_swap_failed", user_id=user_id, symbol=symbol, action=action, error=str(exc))
+            return None
+
+        if result and result.get("status") == "success":
+            from app.services.telegram_service import TelegramService
+            emoji = "🟢" if is_buy else "🔴"
+            await TelegramService().send_message(
+                f"🔗 <b>DeFi Trade Executed</b>\n\n"
+                f"Pair: <code>{symbol}</code>\n"
+                f"Direction: {emoji} {action}\n"
+                f"Network: <code>{settings.defi_network or 'arbitrum'}</code>\n"
+                f"TX: <code>{result.get('tx_hash', 'N/A')}</code>\n"
+                f"Gas used: {result.get('gas_used', 'N/A')}"
+            )
+            logger.info("defi_trade_success", user_id=user_id, symbol=symbol, action=action, tx=result.get("tx_hash"))
+
+        return result
 
     async def _open_paper_trade_if_needed(self, user_id: int, settings: Settings, opportunity: dict):
         action = opportunity["recommended_action"]
@@ -209,6 +272,28 @@ class ScannerService:
                         opportunity["paper_trade_id"] = trade.id
                 except Exception as exc:
                     logger.warning("scanner_paper_trade_failed", symbol=opportunity["symbol"], error=str(exc))
+
+        if (
+            settings
+            and settings.defi_enabled
+            and settings.defi_wallet_address
+            and settings.defi_wallet_private_key_encrypted
+            and opportunities
+        ):
+            top_opp = opportunities[0]
+            if top_opp.get("recommended_action") in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
+                try:
+                    defi_result = await asyncio.wait_for(
+                        self._execute_defi_trade(user_id, settings, top_opp),
+                        timeout=180,
+                    )
+                    if defi_result:
+                        top_opp["defi_tx"] = defi_result.get("tx_hash")
+                        top_opp["defi_status"] = defi_result.get("status")
+                except asyncio.TimeoutError:
+                    logger.warning("defi_trade_timeout", user_id=user_id, symbol=top_opp["symbol"])
+                except Exception as exc:
+                    logger.warning("scanner_defi_trade_failed", symbol=top_opp["symbol"], error=str(exc))
 
         for opportunity in opportunities:
             opportunity.pop("market_data", None)

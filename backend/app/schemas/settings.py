@@ -29,6 +29,12 @@ class SettingsUpdate(BaseModel):
     tuning_frequency: Optional[str] = None
     require_manual_approval_for_tuning: Optional[bool] = None
     notification_settings: Optional[Dict[str, Any]] = None
+    defi_enabled: Optional[bool] = None
+    defi_network: Optional[str] = None
+    defi_wallet_address: Optional[str] = None
+    defi_private_key: Optional[str] = None
+    defi_trade_percent: Optional[float] = None
+    defi_slippage: Optional[float] = None
 
 
 class SettingsResponse(BaseModel):
@@ -58,5 +64,11 @@ class SettingsResponse(BaseModel):
     auto_tuning_enabled: bool = False
     tuning_frequency: str = "weekly"
     require_manual_approval_for_tuning: bool = True
+    defi_enabled: bool = False
+    defi_network: str = "arbitrum"
+    defi_wallet_address: Optional[str] = None
+    defi_has_private_key: bool = False
+    defi_trade_percent: float = 50.0
+    defi_slippage: float = 0.5
 
     model_config = {"from_attributes": True}

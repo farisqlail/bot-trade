@@ -118,6 +118,89 @@ class Settings(Base):
         self.notification_settings = payload
 
     @property
+    def defi_enabled(self) -> bool:
+        return bool((self.notification_settings or {}).get("defi_enabled", False))
+
+    @defi_enabled.setter
+    def defi_enabled(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["defi_enabled"] = bool(value)
+        self.notification_settings = payload
+
+    @property
+    def defi_network(self) -> str:
+        return str((self.notification_settings or {}).get("defi_network", "arbitrum"))
+
+    @defi_network.setter
+    def defi_network(self, value: str):
+        allowed = {"arbitrum", "optimism", "base", "polygon"}
+        payload = dict(self.notification_settings or {})
+        payload["defi_network"] = value if value in allowed else "arbitrum"
+        self.notification_settings = payload
+
+    @property
+    def defi_wallet_address(self):
+        return (self.notification_settings or {}).get("defi_wallet_address")
+
+    @defi_wallet_address.setter
+    def defi_wallet_address(self, value):
+        payload = dict(self.notification_settings or {})
+        if value:
+            payload["defi_wallet_address"] = str(value).strip()
+        else:
+            payload.pop("defi_wallet_address", None)
+        self.notification_settings = payload
+
+    @property
+    def defi_wallet_private_key_encrypted(self):
+        return (self.notification_settings or {}).get("defi_wallet_private_key_encrypted")
+
+    @defi_wallet_private_key_encrypted.setter
+    def defi_wallet_private_key_encrypted(self, value):
+        payload = dict(self.notification_settings or {})
+        if value:
+            payload["defi_wallet_private_key_encrypted"] = str(value)
+        else:
+            payload.pop("defi_wallet_private_key_encrypted", None)
+        self.notification_settings = payload
+
+    @property
+    def defi_has_private_key(self) -> bool:
+        return bool((self.notification_settings or {}).get("defi_wallet_private_key_encrypted"))
+
+    @property
+    def defi_trade_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("defi_trade_percent", 50.0))
+        except (TypeError, ValueError):
+            return 50.0
+
+    @defi_trade_percent.setter
+    def defi_trade_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["defi_trade_percent"] = max(1.0, min(100.0, float(value)))
+        except (TypeError, ValueError):
+            payload["defi_trade_percent"] = 50.0
+        self.notification_settings = payload
+
+    @property
+    def defi_slippage(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("defi_slippage", 0.5))
+        except (TypeError, ValueError):
+            return 0.5
+
+    @defi_slippage.setter
+    def defi_slippage(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["defi_slippage"] = max(0.1, min(5.0, float(value)))
+        except (TypeError, ValueError):
+            payload["defi_slippage"] = 0.5
+        self.notification_settings = payload
+
+    @property
     def scan_all_coins(self) -> bool:
         return bool((self.notification_settings or {}).get("scan_all_coins", False))
 

@@ -92,6 +92,13 @@ export const tuningApi = {
   runManual: () => api.post('/tuning/run'),
 }
 
+export const defiApi = {
+  getNetworks: () => api.get('/defi/networks'),
+  testConnection: (data) => api.post('/defi/test-connection', data),
+  getBalance: () => api.get('/defi/balance'),
+  swap: (data) => api.post('/defi/swap', data),
+}
+
 export const chartApi = {
   getBundle: (symbol, interval = '60', limit = 200) =>
     api.get(`/chart/${symbol}/analysis`, { params: { interval, limit } }),

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import clsx from 'clsx'
-import { botApi } from '../services/api'
+import { botApi, defiApi } from '../services/api'
 
 export default function BotSettings() {
   const [settings, setSettings] = useState(null)
@@ -9,6 +9,8 @@ export default function BotSettings() {
   const [toggling, setToggling] = useState(false)
   const [testingTelegram, setTestingTelegram] = useState(false)
   const [telegramResult, setTelegramResult] = useState(null)
+  const [testingWallet, setTestingWallet] = useState(false)
+  const [walletBalance, setWalletBalance] = useState(null)
 
   useEffect(() => {
     botApi.getSettings()
@@ -31,6 +33,12 @@ export default function BotSettings() {
           polymarket_api_key: res.data.polymarket_api_key || '',
           polymarket_api_secret: '',
           polymarket_api_passphrase: '',
+          defi_enabled: res.data.defi_enabled ?? false,
+          defi_network: res.data.defi_network || 'arbitrum',
+          defi_wallet_address: res.data.defi_wallet_address || '',
+          defi_private_key: '',
+          defi_trade_percent: res.data.defi_trade_percent ?? 50,
+          defi_slippage: res.data.defi_slippage ?? 0.5,
         })
       })
       .catch(console.error)
@@ -50,6 +58,7 @@ export default function BotSettings() {
       }
       if (!payload.polymarket_api_secret) delete payload.polymarket_api_secret
       if (!payload.polymarket_api_passphrase) delete payload.polymarket_api_passphrase
+      if (!payload.defi_private_key) delete payload.defi_private_key
       await botApi.updateSettings(payload)
       alert('Settings saved')
       const res = await botApi.getSettings()
@@ -71,6 +80,23 @@ export default function BotSettings() {
       setTelegramResult({ ok: false, message: e.response?.data?.detail || 'Gagal koneksi ke Telegram' })
     } finally {
       setTestingTelegram(false)
+    }
+  }
+
+  const testWalletConnection = async () => {
+    if (!form.defi_wallet_address) return alert('Masukkan wallet address dulu')
+    setTestingWallet(true)
+    setWalletBalance(null)
+    try {
+      const res = await defiApi.testConnection({
+        wallet_address: form.defi_wallet_address,
+        network: form.defi_network || 'arbitrum',
+      })
+      setWalletBalance(res.data)
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Koneksi wallet gagal')
+    } finally {
+      setTestingWallet(false)
     }
   }
 
@@ -231,6 +257,68 @@ export default function BotSettings() {
                 {telegramResult.ok ? '✅' : '❌'} {telegramResult.message}
               </span>
             )}
+          </div>
+        </div>
+
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+          <h3 className="font-semibold mb-3">DeFi Wallet — Uniswap</h3>
+
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-xs text-yellow-300">
+            ⚠️ <strong>Gunakan wallet KHUSUS trading</strong> dengan dana kecil. Jangan pernah input private key main wallet. Private key dienkripsi AES-256 sebelum disimpan.
+          </div>
+
+          <Toggle label="Enable DeFi Trading (Uniswap)" name="defi_enabled" />
+
+          <div className="mt-4 space-y-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Network</label>
+              <select
+                value={form.defi_network || 'arbitrum'}
+                onChange={(e) => setForm((f) => ({ ...f, defi_network: e.target.value }))}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+              >
+                <option value="arbitrum">Arbitrum One (recommended — gas termurah)</option>
+                <option value="optimism">Optimism</option>
+                <option value="base">Base</option>
+                <option value="polygon">Polygon</option>
+              </select>
+            </div>
+
+            <Field label="Wallet Address (0x...)" name="defi_wallet_address" placeholder="0xabc123..." />
+
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">
+                Private Key {settings?.defi_has_private_key && <span className="text-emerald-400 ml-1">✓ sudah tersimpan</span>}
+              </label>
+              <input
+                type="password"
+                placeholder={settings?.defi_has_private_key ? '(leave blank to keep existing)' : '0x... atau tanpa 0x'}
+                value={form.defi_private_key ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, defi_private_key: e.target.value }))}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Trade Size (% USDC per signal)" name="defi_trade_percent" type="number" step="5" placeholder="50" />
+              <Field label="Slippage %" name="defi_slippage" type="number" step="0.1" placeholder="0.5" />
+            </div>
+
+            <div className="flex items-center gap-3 mt-2">
+              <button
+                type="button"
+                onClick={testWalletConnection}
+                disabled={testingWallet}
+                className="px-5 py-2 rounded-lg bg-violet-500/20 border border-violet-500/30 text-violet-300 text-sm font-semibold hover:bg-violet-500/30 disabled:opacity-50 transition-colors"
+              >
+                {testingWallet ? 'Connecting...' : '🔗 Test Wallet Connection'}
+              </button>
+              {walletBalance && (
+                <div className="text-sm text-emerald-400">
+                  ✅ ETH: {walletBalance.eth_balance} | USDC: ${walletBalance.usdc_balance}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

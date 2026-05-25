@@ -34,6 +34,11 @@ async def update_settings(
         raise HTTPException(status_code=404, detail="Settings not found")
 
     for field, value in update_data.model_dump(exclude_none=True).items():
+        if field == "defi_private_key":
+            if value:
+                from app.services.defi_service import encrypt_private_key
+                s.defi_wallet_private_key_encrypted = encrypt_private_key(value)
+            continue
         if field in {"polymarket_api_secret", "polymarket_api_passphrase"} and not value:
             continue
         if field != "polymarket_api_secret" or value:

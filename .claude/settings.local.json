@@ -17,7 +17,10 @@
       "PowerShell(npm run *)",
       "PowerShell(netstat *)",
       "PowerShell(Get-Process *)",
-      "PowerShell(Test-Path \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\node_modules\"; \\(Get-ChildItem \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\node_modules\" | Measure-Object\\).Count)"
+      "PowerShell(Test-Path \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\node_modules\"; \\(Get-ChildItem \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\node_modules\" | Measure-Object\\).Count)",
+      "PowerShell(npm rebuild *)",
+      "Bash(pip install *)",
+      "PowerShell(pip install *)"
     ]
   }
 }
