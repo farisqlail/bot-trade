@@ -150,9 +150,30 @@ export default function RiskSettings() {
     </div>
   )
 
+  const applyMicroCapitalPreset = () => {
+    setForm((f) => ({
+      ...f,
+      risk_percent: 2.0,
+      max_open_trades: 1,
+      daily_loss_limit_percent: 5.0,
+      max_drawdown_percent: 20.0,
+      consecutive_loss_limit: 2,
+    }))
+  }
+
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold">Risk Settings</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold">Risk Settings</h2>
+        <button
+          type="button"
+          onClick={applyMicroCapitalPreset}
+          className="px-4 py-2 text-xs rounded-lg font-semibold border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-colors"
+          title="Isi form dengan preset optimal untuk modal $1–$10 USDC"
+        >
+          💰 Preset Micro Capital ($4.25)
+        </button>
+      </div>
 
       {riskStatus && (
         <div className={clsx(

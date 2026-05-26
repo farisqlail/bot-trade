@@ -149,23 +149,46 @@ export default function BotSettings() {
     </div>
   )
 
+  const applyMicroCapitalPreset = () => {
+    setForm((f) => ({
+      ...f,
+      paper_balance: 4.25,
+      leverage: 1,
+      scan_all_coins: false,
+      max_scan_coins: 10,
+      min_volume_filter: 1000000,
+      defi_trade_percent: 30,
+      defi_slippage: 1.0,
+    }))
+  }
+
   if (!settings) return <div className="animate-pulse text-gray-500">Loading settings...</div>
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">Bot Settings</h2>
-        <button
-          onClick={toggleBot}
-          disabled={toggling}
-          className={`px-6 py-2 text-sm rounded-lg font-semibold transition-colors disabled:opacity-50 ${
-            settings.bot_enabled
-              ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30'
-              : 'bg-green-500/20 text-green-400 hover:bg-green-500/30 border border-green-500/30'
-          }`}
-        >
-          {toggling ? 'Working...' : settings.bot_enabled ? 'Stop Bot' : 'Start Bot'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={applyMicroCapitalPreset}
+            className="px-4 py-2 text-xs rounded-lg font-semibold border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-colors"
+            title="Isi form dengan preset optimal untuk modal $1–$10 USDC"
+          >
+            💰 Preset Micro Capital ($4.25)
+          </button>
+          <button
+            onClick={toggleBot}
+            disabled={toggling}
+            className={`px-6 py-2 text-sm rounded-lg font-semibold transition-colors disabled:opacity-50 ${
+              settings.bot_enabled
+                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30'
+                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30 border border-green-500/30'
+            }`}
+          >
+            {toggling ? 'Working...' : settings.bot_enabled ? 'Stop Bot' : 'Start Bot'}
+          </button>
+        </div>
       </div>
 
       <form onSubmit={handleSave} className="space-y-5">

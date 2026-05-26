@@ -191,30 +191,63 @@ class TelegramService:
 
         return await self.send_message_with_keyboard(text, keyboard)
 
-    async def notify_trade_opened(self, symbol: str, direction: str, entry_price: float,
-                                   stop_loss: float, take_profit: float) -> None:
+    async def notify_bot_started(self, coin_count: int, auto_trade: bool, mode: str = "paper") -> None:
         if not self.enabled:
             return
-        emoji = "🟢" if direction == "LONG" else "🔴"
+        mode_emoji = "📄" if mode == "paper" else "🔗"
+        trade_status = "✅ AKTIF" if auto_trade else "⏸ MANUAL"
         text = (
-            f"{emoji} <b>Trade Opened</b>\n"
-            f"Symbol: <b>{symbol}</b>\n"
-            f"Direction: {direction}\n"
-            f"Entry: <code>${entry_price:,.4f}</code>\n"
-            f"SL: <code>${stop_loss:,.4f}</code>  TP: <code>${take_profit:,.4f}</code>"
+            f"🤖 <b>Bot Trading Dimulai</b>\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"🔍 Scanning: <b>{coin_count} koin</b>\n"
+            f"{mode_emoji} Mode: <b>{mode.upper()}</b>\n"
+            f"⚡ Auto Trade: {trade_status}\n"
+            f"🕐 Waktu: <code>{__import__('datetime').datetime.now().strftime('%H:%M:%S')}</code>"
         )
         await self.send_message(text)
 
-    async def notify_trade_closed(self, symbol: str, pnl: float, pnl_percent: float,
-                                   exit_price: float, reason: str) -> None:
+    async def notify_trade_opened(
+        self, symbol: str, direction: str, entry_price: float,
+        stop_loss: float, take_profit: float,
+        score: float | None = None,
+        sentiment: str | None = None,
+        confidence: float | None = None,
+        volume_24h: float | None = None,
+        change_24h: float | None = None,
+    ) -> None:
+        if not self.enabled:
+            return
+        emoji = "🟢" if direction == "LONG" else "🔴"
+        conf_str = f"  Conf: {int(confidence * 100)}%" if confidence is not None else ""
+        score_str = f"\n📊 Score: <code>{score:.4f}</code>{conf_str}" if score is not None else ""
+        sentiment_str = f"\n🧠 Sentiment: {sentiment}" if sentiment else ""
+        change_str = f"\n📈 24h Change: {change_24h:+.2f}%" if change_24h is not None else ""
+        vol_str = f"\n📦 Volume 24h: ${volume_24h:,.0f}" if volume_24h is not None else ""
+        text = (
+            f"{emoji} <b>Trade Dibuka — {symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"Arah: <b>{direction}</b>\n"
+            f"Entry: <code>${entry_price:,.6g}</code>\n"
+            f"SL: <code>${stop_loss:,.6g}</code>   TP: <code>${take_profit:,.6g}</code>"
+            f"{score_str}{sentiment_str}{change_str}{vol_str}"
+        )
+        await self.send_message(text)
+
+    async def notify_trade_closed(
+        self, symbol: str, pnl: float, pnl_percent: float,
+        exit_price: float, reason: str,
+        new_balance: float | None = None,
+    ) -> None:
         if not self.enabled:
             return
         emoji = "✅" if pnl >= 0 else "❌"
+        balance_str = f"\n💰 Saldo Baru: <code>${new_balance:,.2f}</code>" if new_balance is not None else ""
         text = (
-            f"{emoji} <b>Trade Closed</b>\n"
-            f"Symbol: <b>{symbol}</b>\n"
+            f"{emoji} <b>Trade Ditutup — {symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━\n"
             f"PnL: <code>${pnl:+.2f}</code> ({pnl_percent:+.2f}%)\n"
-            f"Exit: <code>${exit_price:,.4f}</code>\n"
-            f"Reason: {reason}"
+            f"Exit: <code>${exit_price:,.6g}</code>\n"
+            f"Alasan: {reason}"
+            f"{balance_str}"
         )
         await self.send_message(text)

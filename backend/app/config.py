@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     BYBIT_API_KEY: str = ""
     BYBIT_API_SECRET: str = ""
     BYBIT_BASE_URL: str = "https://api.bybit.com"
+    BYBIT_VERIFY_SSL: bool = True
 
     DEFAULT_SYMBOL: str = "featured"
     DEFAULT_STOP_LOSS: float = 103500.0

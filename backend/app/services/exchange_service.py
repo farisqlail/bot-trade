@@ -1,12 +1,16 @@
 import asyncio
 import json
 
+import certifi
 import httpx
 
 from app.config import settings
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# SSL verification setting: use certifi CA bundle by default, or disable if BYBIT_VERIFY_SSL=False
+_SSL_VERIFY = certifi.where() if settings.BYBIT_VERIFY_SSL else False
 
 
 class ExchangeService:
@@ -65,7 +69,7 @@ class ExchangeService:
 
     async def get_all_tickers(self, min_turnover_usd: float = 0.0) -> list[dict]:
         """One batch call → all active linear USDT perpetuals sorted by turnover."""
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
             response = await client.get(
                 f"{self.bybit_base_url}/v5/market/tickers",
                 params={"category": "linear"},
@@ -101,7 +105,7 @@ class ExchangeService:
         return tickers
 
     async def get_ticker(self, symbol: str) -> dict:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
             response = await client.get(
                 f"{self.bybit_base_url}/v5/market/tickers",
                 params={"category": "linear", "symbol": symbol.upper()},
@@ -123,7 +127,7 @@ class ExchangeService:
         }
 
     async def get_klines(self, symbol: str, interval: str = "60", limit: int = 10) -> list:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
             response = await client.get(
                 f"{self.bybit_base_url}/v5/market/kline",
                 params={
@@ -154,7 +158,7 @@ class ExchangeService:
     async def _search_polymarket_context(self, symbol: str) -> dict:
         query = self.POLYMARKET_QUERIES.get(symbol.upper(), symbol.replace("USDT", "").lower())
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
                 response = await client.get(
                     f"{self.gamma_base_url}/public-search",
                     params={

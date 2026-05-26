@@ -20,7 +20,17 @@
       "PowerShell(Test-Path \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\node_modules\"; \\(Get-ChildItem \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\node_modules\" | Measure-Object\\).Count)",
       "PowerShell(npm rebuild *)",
       "Bash(pip install *)",
-      "PowerShell(pip install *)"
+      "PowerShell(pip install *)",
+      "Bash(npm run *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell(Test-NetConnection *)",
+      "PowerShell(cd \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\"; $env:FORCE_COLOR = \"0\"; node node_modules/.bin/vite --port 3001 2>&1 | Select-Object -First 10)",
+      "PowerShell(cd \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\"; $env:FORCE_COLOR = \"0\"; node_modules\\\\.bin\\\\vite.cmd --port 3001 2>&1 | Select-Object -First 10)",
+      "Bash(node node_modules/.bin/vite --version)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\src\" -Recurse | Where-Object { !$_.PSIsContainer } | Select-Object Name, FullName)",
+      "Bash(timeout 10 node_modules/.bin/vite --port 3001)",
+      "Bash(node_modules/.bin/vite --version)"
     ]
   }
 }

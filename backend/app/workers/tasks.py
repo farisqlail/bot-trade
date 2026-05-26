@@ -55,6 +55,15 @@ def scan_market_opportunities(self):
             scanner = ScannerService(db)
 
             for s in active_settings:
+                if s.auto_trade:
+                    mode = "defi" if (s.defi_enabled and s.defi_wallet_address) else "paper"
+                    coin_count = s.max_scan_coins if s.scan_all_coins else 30
+                    await telegram.notify_bot_started(
+                        coin_count=coin_count,
+                        auto_trade=True,
+                        mode=mode,
+                    )
+
                 opportunities = await scanner.scan_opportunities(
                     user_id=s.user_id,
                     deep_analysis=True,
@@ -214,12 +223,21 @@ def check_stop_loss_take_profit(self):
                     logger.info("auto_close_trade", trade_id=trade.id,
                                 reason="SL" if hit_sl else "TP", price=price)
                     from app.services.telegram_service import TelegramService
+                    from app.models.settings import Settings as _Settings
+                    _sr = await db.execute(
+                        select(_Settings).where(_Settings.user_id == trade.user_id)
+                    )
+                    _s = _sr.scalar_one_or_none()
+                    new_balance = None
+                    if _s and _s.paper_balance is not None:
+                        new_balance = round(_s.paper_balance + (closed.pnl or 0.0), 2)
                     await TelegramService().notify_trade_closed(
                         symbol=closed.symbol,
                         pnl=closed.pnl or 0.0,
                         pnl_percent=closed.pnl_percent or 0.0,
                         exit_price=closed.exit_price or price,
                         reason=reason,
+                        new_balance=new_balance,
                     )
 
             await db.commit()

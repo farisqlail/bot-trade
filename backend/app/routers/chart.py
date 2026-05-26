@@ -10,11 +10,14 @@ from sqlalchemy import func, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.logging_config import get_logger
 from app.core.security import get_current_user_id
 from app.database import AsyncSessionLocal, get_db
 from app.models.ai_analysis import AIAnalysis
 from app.models.trade import Trade, TradeStatus
 from app.services.exchange_service import ExchangeService
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/chart", tags=["chart"])
 
@@ -141,8 +144,16 @@ async def _fetch_candles_with_ema(
     interval: str,
     limit: int,
 ) -> list[CandleData]:
-    fetch_limit = min(limit + 250, 1000)
-    raw = await exchange.get_klines(symbol, interval=interval, limit=fetch_limit)
+    try:
+        fetch_limit = min(limit + 250, 1000)
+        raw = await exchange.get_klines(symbol, interval=interval, limit=fetch_limit)
+    except Exception as exc:
+        logger.warning("candles_fetch_failed", symbol=symbol, interval=interval, error=str(exc))
+        return []
+
+    if not raw:
+        return []
+
     closes = [c["close"] for c in raw]
     ema20_vals = _ema(closes, 20)
     ema50_vals = _ema(closes, 50)
@@ -215,23 +226,27 @@ async def get_watchlist_ranking(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    subq = (
-        select(AIAnalysis.symbol, func.max(AIAnalysis.created_at).label("max_ts"))
-        .group_by(AIAnalysis.symbol)
-        .subquery()
-    )
-    analyses = (
-        await db.execute(
-            select(AIAnalysis)
-            .join(subq, (AIAnalysis.symbol == subq.c.symbol) & (AIAnalysis.created_at == subq.c.max_ts))
-            .order_by(desc(AIAnalysis.confidence))
-            .limit(limit * 2)
+    try:
+        subq = (
+            select(AIAnalysis.symbol, func.max(AIAnalysis.created_at).label("max_ts"))
+            .group_by(AIAnalysis.symbol)
+            .subquery()
         )
-    ).scalars().all()
+        analyses = (
+            await db.execute(
+                select(AIAnalysis)
+                .join(subq, (AIAnalysis.symbol == subq.c.symbol) & (AIAnalysis.created_at == subq.c.max_ts))
+                .order_by(desc(AIAnalysis.confidence))
+                .limit(limit * 2)
+            )
+        ).scalars().all()
+    except Exception as exc:
+        logger.warning("watchlist_ranking_db_error", error=str(exc))
+        return []
 
     exchange = ExchangeService()
-    items: list[WatchlistItem] = []
-    for a in analyses:
+
+    async def _get_item(a) -> WatchlistItem:
         price = change = 0.0
         try:
             t = await exchange.get_ticker(a.symbol)
@@ -239,18 +254,17 @@ async def get_watchlist_ranking(
         except Exception:
             pass
         score = float(a.confidence or 0) * (1.0 + abs(change) / 100.0)
-        items.append(
-            WatchlistItem(
-                symbol=a.symbol,
-                price=price,
-                change_24h=change,
-                signal=a.recommended_action,
-                confidence=a.confidence,
-                score=score,
-            )
+        return WatchlistItem(
+            symbol=a.symbol,
+            price=price,
+            change_24h=change,
+            signal=a.recommended_action,
+            confidence=a.confidence,
+            score=score,
         )
 
-    items.sort(key=lambda x: x.score, reverse=True)
+    items = await asyncio.gather(*[_get_item(a) for a in analyses])
+    items = sorted(items, key=lambda x: x.score, reverse=True)
     return items[:limit]
 
 

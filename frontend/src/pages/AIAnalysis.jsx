@@ -178,7 +178,7 @@ export default function AIAnalysis() {
         </div>
       ) : opportunities.length ? (
         <div className="grid gap-4 xl:grid-cols-2">
-          {opportunities.map((item) => (
+          {[...new Map(opportunities.map((o) => [o.symbol, o])).values()].map((item) => (
             <div key={item.symbol} className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
               <div className="flex flex-col gap-3 border-b border-gray-800 pb-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>

@@ -38,15 +38,15 @@ class ScannerService:
         sentiment_score = float(market_data.get("polymarket_bias_score") or 0.0)
         score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
 
-        if score >= 0.012:
+        if score >= 0.001:
             action = "BUY"
-            sentiment = "STRONG_BUY" if score >= 0.04 else "BUY"
+            sentiment = "STRONG_BUY" if score >= 0.005 else "BUY"
             trend = "BULLISH"
             suggested_sl = current_price * 0.985
             suggested_tp = current_price * 1.03
-        elif score <= -0.012:
+        elif score <= -0.001:
             action = "SELL"
-            sentiment = "STRONG_SELL" if score <= -0.04 else "SELL"
+            sentiment = "STRONG_SELL" if score <= -0.005 else "SELL"
             trend = "BEARISH"
             suggested_sl = current_price * 1.015
             suggested_tp = current_price * 0.97
@@ -93,9 +93,11 @@ class ScannerService:
             return None
 
         service = DeFiService(network=settings.defi_network or "arbitrum")
-        token_address = service.get_token_address(symbol)
+        token_address = await service.get_token_address(symbol)
         if not token_address:
             return None
+
+        token_fee = service.get_token_fee(symbol)
 
         try:
             token_raw, _ = await service.get_token_balance(settings.defi_wallet_address, token_address)
@@ -119,12 +121,14 @@ class ScannerService:
                     token_address,
                     trade_amount,
                     slippage=settings.defi_slippage / 100,
+                    fee=token_fee,
                 )
             elif is_sell and in_position:
                 result = await service.sell_all_to_usdc(
                     settings.defi_wallet_private_key_encrypted,
                     token_address,
                     slippage=settings.defi_slippage / 100,
+                    fee=token_fee,
                 )
         except Exception as exc:
             logger.error("defi_swap_failed", user_id=user_id, symbol=symbol, action=action, error=str(exc))
@@ -147,7 +151,7 @@ class ScannerService:
 
     async def _open_paper_trade_if_needed(self, user_id: int, settings: Settings, opportunity: dict):
         action = opportunity["recommended_action"]
-        if action not in {"BUY", "SELL"}:
+        if action not in {"BUY", "SELL", "STRONG_BUY", "STRONG_SELL"}:
             return None
 
         result = await self.db.execute(
@@ -165,7 +169,7 @@ class ScannerService:
 
         trade_data = TradeCreate(
             symbol=opportunity["symbol"],
-            direction=TradeDirection.LONG if action == "BUY" else TradeDirection.SHORT,
+            direction=TradeDirection.LONG if action in {"BUY", "STRONG_BUY"} else TradeDirection.SHORT,
             entry_price=opportunity["suggested_entry"],
             stop_loss=opportunity["suggested_sl"],
             take_profit=opportunity["suggested_tp"],
@@ -175,13 +179,18 @@ class ScannerService:
         )
         trade = await self.trading_svc.create_trade(user_id, trade_data, settings.paper_balance)
         from app.services.telegram_service import TelegramService
-        direction_str = "LONG" if action == "BUY" else "SHORT"
+        direction_str = "LONG" if action in {"BUY", "STRONG_BUY"} else "SHORT"
         await TelegramService().notify_trade_opened(
             symbol=opportunity["symbol"],
             direction=direction_str,
             entry_price=opportunity["suggested_entry"],
             stop_loss=opportunity["suggested_sl"],
             take_profit=opportunity["suggested_tp"],
+            score=opportunity.get("score"),
+            sentiment=opportunity.get("sentiment"),
+            confidence=opportunity.get("confidence"),
+            volume_24h=opportunity.get("volume_24h"),
+            change_24h=opportunity.get("change_24h"),
         )
         return trade
 
@@ -204,8 +213,20 @@ class ScannerService:
                 scanning=len(watchlist),
                 min_volume_usd=min_vol,
             )
+        elif settings and (settings.notification_settings or {}).get("scanner_watchlist"):
+            watchlist = self.exchange_svc.get_watchlist(settings.scanner_watchlist)
         else:
-            watchlist = self.exchange_svc.get_watchlist(settings.scanner_watchlist if settings else None)
+            min_vol = settings.min_volume_filter if settings else 1_000_000.0
+            all_tickers = await self.exchange_svc.get_all_tickers(min_turnover_usd=min_vol)
+            watchlist = [t["symbol"] for t in all_tickers[:30]]
+            logger.info(
+                "scanner_top_movers_mode",
+                scanning=len(watchlist),
+                min_volume_usd=min_vol,
+            )
+
+        # Deduplicate preserving order
+        watchlist = list(dict.fromkeys(watchlist))
 
         fetch_sem = asyncio.Semaphore(3)
 
@@ -265,7 +286,7 @@ class ScannerService:
             await asyncio.gather(*[_run_ai(opp) for opp in opportunities[:ai_limit]])
 
         if execute_paper and settings and settings.auto_trade:
-            for opportunity in opportunities[:2]:
+            for opportunity in opportunities[:5]:
                 try:
                     trade = await self._open_paper_trade_if_needed(user_id, settings, opportunity)
                     if trade:
@@ -280,20 +301,32 @@ class ScannerService:
             and settings.defi_wallet_private_key_encrypted
             and opportunities
         ):
-            top_opp = opportunities[0]
-            if top_opp.get("recommended_action") in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
+            from app.services.defi_service import DeFiService
+            _defi_svc = DeFiService(network=settings.defi_network or "arbitrum")
+            traded_opp = None
+            for candidate in opportunities[:5]:
+                if candidate.get("recommended_action") not in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
+                    continue
+                token_addr = await _defi_svc.get_token_address(candidate["symbol"])
+                if not token_addr:
+                    logger.info("defi_skip_no_address", symbol=candidate["symbol"])
+                    continue
+                traded_opp = candidate
+                break
+
+            if traded_opp:
                 try:
                     defi_result = await asyncio.wait_for(
-                        self._execute_defi_trade(user_id, settings, top_opp),
+                        self._execute_defi_trade(user_id, settings, traded_opp),
                         timeout=180,
                     )
                     if defi_result:
-                        top_opp["defi_tx"] = defi_result.get("tx_hash")
-                        top_opp["defi_status"] = defi_result.get("status")
+                        traded_opp["defi_tx"] = defi_result.get("tx_hash")
+                        traded_opp["defi_status"] = defi_result.get("status")
                 except asyncio.TimeoutError:
-                    logger.warning("defi_trade_timeout", user_id=user_id, symbol=top_opp["symbol"])
+                    logger.warning("defi_trade_timeout", user_id=user_id, symbol=traded_opp["symbol"])
                 except Exception as exc:
-                    logger.warning("scanner_defi_trade_failed", symbol=top_opp["symbol"], error=str(exc))
+                    logger.warning("scanner_defi_trade_failed", symbol=traded_opp["symbol"], error=str(exc))
 
         for opportunity in opportunities:
             opportunity.pop("market_data", None)
