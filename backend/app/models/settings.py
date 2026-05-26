@@ -201,6 +201,16 @@ class Settings(Base):
         self.notification_settings = payload
 
     @property
+    def defi_only_scan(self) -> bool:
+        return bool((self.notification_settings or {}).get("defi_only_scan", False))
+
+    @defi_only_scan.setter
+    def defi_only_scan(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["defi_only_scan"] = bool(value)
+        self.notification_settings = payload
+
+    @property
     def scan_all_coins(self) -> bool:
         return bool((self.notification_settings or {}).get("scan_all_coins", False))
 

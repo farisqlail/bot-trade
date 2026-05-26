@@ -228,6 +228,18 @@ class ScannerService:
         # Deduplicate preserving order
         watchlist = list(dict.fromkeys(watchlist))
 
+        # DeFi-only scan: restrict to coins with known Arbitrum ERC-20 addresses
+        if settings and settings.defi_enabled and settings.defi_only_scan:
+            from app.services.defi_service import ARBITRUM_KNOWN_TOKENS
+            arbitrum_symbols = set(ARBITRUM_KNOWN_TOKENS.keys())
+            before_count = len(watchlist)
+            filtered = [s for s in watchlist if s in arbitrum_symbols]
+            if filtered:
+                watchlist = filtered
+                logger.info("scanner_defi_only_filter", before=before_count, after=len(filtered))
+            else:
+                logger.warning("scanner_defi_only_filter_empty_fallback", watchlist_size=before_count)
+
         fetch_sem = asyncio.Semaphore(3)
 
         async def _fetch_symbol(symbol: str):

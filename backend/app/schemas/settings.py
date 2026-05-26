@@ -35,6 +35,7 @@ class SettingsUpdate(BaseModel):
     defi_private_key: Optional[str] = None
     defi_trade_percent: Optional[float] = None
     defi_slippage: Optional[float] = None
+    defi_only_scan: Optional[bool] = None
 
 
 class SettingsResponse(BaseModel):
@@ -70,5 +71,6 @@ class SettingsResponse(BaseModel):
     defi_has_private_key: bool = False
     defi_trade_percent: float = 50.0
     defi_slippage: float = 0.5
+    defi_only_scan: bool = False
 
     model_config = {"from_attributes": True}

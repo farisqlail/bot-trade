@@ -39,6 +39,7 @@ export default function BotSettings() {
           defi_private_key: '',
           defi_trade_percent: res.data.defi_trade_percent ?? 50,
           defi_slippage: res.data.defi_slippage ?? 0.5,
+          defi_only_scan: res.data.defi_only_scan ?? false,
         })
       })
       .catch(console.error)
@@ -291,6 +292,7 @@ export default function BotSettings() {
           </div>
 
           <Toggle label="Enable DeFi Trading (Uniswap)" name="defi_enabled" />
+          <Toggle label="DeFi Only Scan (hanya coin yang ada di Arbitrum)" name="defi_only_scan" />
 
           <div className="mt-4 space-y-3">
             <div>
