@@ -69,6 +69,8 @@ export const aiApi = {
       throw error
     }
   },
+  watchAndScan: (symbol, execute_defi = true) =>
+    api.post('/ai/watch', { symbol, execute_defi }, { timeout: 300000 }),
 }
 
 export const riskApi = {

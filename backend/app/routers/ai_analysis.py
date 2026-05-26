@@ -8,6 +8,7 @@ from app.services.ai_service import AIService
 from app.services.scanner_service import ScannerService
 from app.services.exchange_service import ExchangeService
 from app.models.ai_analysis import AIAnalysis
+from app.models.settings import Settings
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -34,6 +35,11 @@ class AIAnalysisResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WatchRequest(BaseModel):
+    symbol: str
+    execute_defi: bool = True
+
+
 class OpportunityResponse(BaseModel):
     symbol: str
     score: float
@@ -54,6 +60,37 @@ class OpportunityResponse(BaseModel):
     analysis_id: Optional[int] = None
     created_at: Optional[str] = None
     paper_trade_id: Optional[int] = None
+
+
+@router.post("/watch", response_model=List[OpportunityResponse])
+async def watch_and_scan(
+    request: WatchRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    symbol = request.symbol.upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Symbol is required")
+
+    result = await db.execute(select(Settings).where(Settings.user_id == user_id))
+    settings_obj = result.scalar_one_or_none()
+    if settings_obj:
+        current = list(settings_obj.scanner_watchlist)
+        if symbol not in current:
+            current.append(symbol)
+            settings_obj.scanner_watchlist = current
+            await db.commit()
+
+    scanner = ScannerService(db)
+    try:
+        return await scanner.scan_specific_symbols(
+            user_id=user_id,
+            symbols=[symbol],
+            deep_analysis=True,
+            execute_defi=request.execute_defi,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Scan error: {str(e)}")
 
 
 @router.post("/analyze/{symbol}", response_model=AIAnalysisResponse)

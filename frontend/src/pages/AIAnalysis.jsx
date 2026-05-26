@@ -27,6 +27,8 @@ export default function AIAnalysis() {
   const [autoPaper, setAutoPaper] = useState(false)
   const [lastRun, setLastRun] = useState(null)
   const [countdown, setCountdown] = useState(POLL_INTERVAL)
+  const [watchInput, setWatchInput] = useState('')
+  const [watchLoading, setWatchLoading] = useState(false)
   const prevOpportunities = useRef([])
   const countdownRef = useRef(POLL_INTERVAL)
 
@@ -61,6 +63,26 @@ export default function AIAnalysis() {
       return 0
     }
   }, [])
+
+  const handleWatchScan = useCallback(async () => {
+    const sym = watchInput.trim().toUpperCase()
+    if (!sym) return
+    setWatchLoading(true)
+    try {
+      const res = await aiApi.watchAndScan(sym)
+      const newOpps = res.data
+      setOpportunities((prev) => {
+        const map = new Map(prev.map((o) => [o.symbol, o]))
+        newOpps.forEach((o) => map.set(o.symbol, o))
+        return [...map.values()]
+      })
+      setWatchInput('')
+    } catch (e) {
+      alert(e.response?.data?.detail || e.response?.data?.error || 'Watch scan failed')
+    } finally {
+      setWatchLoading(false)
+    }
+  }, [watchInput])
 
   const runScan = useCallback(async (executePaper = false) => {
     setRunningScan(true)
@@ -151,6 +173,24 @@ export default function AIAnalysis() {
             {runningScan ? 'Scanning...' : 'Scan Manual'}
           </button>
         </div>
+      </div>
+
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={watchInput}
+          onChange={(e) => setWatchInput(e.target.value.toUpperCase())}
+          onKeyDown={(e) => e.key === 'Enter' && handleWatchScan()}
+          placeholder="ARBUSDT"
+          className="flex-1 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-cyan-500 focus:outline-none"
+        />
+        <button
+          onClick={handleWatchScan}
+          disabled={watchLoading || !watchInput.trim()}
+          className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {watchLoading ? 'Scanning...' : 'Add & Scan'}
+        </button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">

@@ -39,7 +39,9 @@ async def _get_all_settings(db: AsyncSession) -> list[Settings]:
 
 async def _handle_command(cmd: str, db: AsyncSession) -> str:
     """Handle /command messages. Returns reply text (HTML)."""
-    cmd = cmd.strip().split()[0].lower()  # strip args + lowercase
+    parts = cmd.strip().split()
+    cmd = parts[0].lower()
+    args = [p.upper() for p in parts[1:]]
 
     if cmd == "/help":
         return (
@@ -51,6 +53,10 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
             "/resume — Resume bot\n"
             "/enable_autotrade — Toggle auto-trade on/off\n"
             "/close_all — Close all open paper trades\n"
+            "/watch ETHUSDT ARBUSDT — Add coins to watchlist + scan now\n"
+            "/unwatch ETHUSDT — Remove coin from watchlist\n"
+            "/watchlist — View active watchlist\n"
+            "/scan — Trigger manual scan\n"
             "/help — Show this message"
         )
 
@@ -179,6 +185,91 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
         if closed_count:
             return f"🔒 Closed {closed_count} open paper trade(s) at entry price."
         return "ℹ️ No open trades to close."
+
+    elif cmd == "/watch":
+        if not args:
+            return "⚠️ Usage: /watch ETHUSDT ARBUSDT"
+        for s in all_settings:
+            current = list(s.scanner_watchlist)
+            new_symbols = [sym for sym in args if sym not in current]
+            if new_symbols:
+                s.scanner_watchlist = current + new_symbols
+        await db.commit()
+
+        from app.services.scanner_service import ScannerService
+        scan_lines = []
+        scan_error = None
+        for s in all_settings:
+            scanner = ScannerService(db)
+            try:
+                results = await scanner.scan_specific_symbols(
+                    user_id=s.user_id,
+                    symbols=args,
+                    deep_analysis=False,
+                    execute_defi=s.defi_enabled,
+                )
+                for r in results:
+                    action = r.get("recommended_action", "HOLD")
+                    score = r.get("score", 0)
+                    emoji = "🟢" if action in {"BUY", "STRONG_BUY"} else "🔴" if action in {"SELL", "STRONG_SELL"} else "⚪"
+                    scan_lines.append(f"{emoji} <code>{r['symbol']}</code>: {action} (score {score:+.4f})")
+                if not results:
+                    scan_error = f"No market data for {' '.join(args)} — check symbol format (e.g. WETHUSDT not WETH)"
+            except Exception as exc:
+                scan_error = str(exc)
+                logger.warning("watch_scan_failed", error=str(exc))
+        syms_str = " ".join(args)
+        if scan_lines:
+            result_text = "\n".join(scan_lines)
+        elif scan_error:
+            result_text = f"⚠️ {scan_error}"
+        else:
+            result_text = "⚠️ No results."
+        return f"✅ Added to watchlist: <code>{syms_str}</code>\n\n📊 <b>Scan Result</b>\n{result_text}"
+
+    elif cmd == "/unwatch":
+        if not args:
+            return "⚠️ Usage: /unwatch ETHUSDT"
+        removed = []
+        for s in all_settings:
+            current = list(s.scanner_watchlist)
+            removed.extend([sym for sym in current if sym in args])
+            s.scanner_watchlist = [sym for sym in current if sym not in args]
+        await db.commit()
+        unique_removed = list(dict.fromkeys(removed))
+        if unique_removed:
+            return f"🗑 Removed from watchlist: <code>{' '.join(unique_removed)}</code>"
+        return f"ℹ️ Not in watchlist: <code>{' '.join(args)}</code>"
+
+    elif cmd == "/watchlist":
+        lines = []
+        for s in all_settings:
+            wl = s.scanner_watchlist
+            mode = "All coins" if s.scan_all_coins else "Watchlist"
+            lines.append(
+                f"📋 <b>Watchlist ({mode})</b>\n"
+                + ", ".join(f"<code>{sym}</code>" for sym in wl)
+            )
+        return "\n\n".join(lines) if lines else "No watchlist found."
+
+    elif cmd == "/scan":
+        from app.services.scanner_service import ScannerService
+        lines = []
+        for s in all_settings:
+            scanner = ScannerService(db)
+            try:
+                results = await scanner.scan_opportunities(user_id=s.user_id, deep_analysis=False)
+                top = results[:5]
+                scan_lines = []
+                for r in top:
+                    action = r.get("recommended_action", "HOLD")
+                    score = r.get("score", 0)
+                    emoji = "🟢" if action in {"BUY", "STRONG_BUY"} else "🔴" if action in {"SELL", "STRONG_SELL"} else "⚪"
+                    scan_lines.append(f"{emoji} <code>{r['symbol']}</code>: {action} (score {score:+.4f})")
+                lines.append("📊 <b>Scan Results (top 5)</b>\n" + "\n".join(scan_lines))
+            except Exception as exc:
+                lines.append(f"⚠️ Scan failed: {exc}")
+        return "\n\n".join(lines) if lines else "No scan results."
 
     return f"❓ Unknown command: <code>{cmd}</code>. Use /help."
 

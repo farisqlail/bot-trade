@@ -30,7 +30,8 @@
       "Bash(node node_modules/.bin/vite --version)",
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\faris\\\\trading-bot\\\\frontend\\\\src\" -Recurse | Where-Object { !$_.PSIsContainer } | Select-Object Name, FullName)",
       "Bash(timeout 10 node_modules/.bin/vite --port 3001)",
-      "Bash(node_modules/.bin/vite --version)"
+      "Bash(node_modules/.bin/vite --version)",
+      "Bash(Get-ChildItem *)"
     ]
   }
 }

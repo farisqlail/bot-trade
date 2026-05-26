@@ -50,6 +50,7 @@ NETWORKS = {
         "chain_id": 42161,
         "swap_router": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
         "usdc": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+        "usdc_e": "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
         "weth": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
         "wbtc": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
         "usdc_decimals": 6,
@@ -60,6 +61,7 @@ NETWORKS = {
         "chain_id": 10,
         "swap_router": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
         "usdc": "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+        "usdc_e": "0x7F5c764cBc14f9669B88837ca1490cCa17c31607",
         "weth": "0x4200000000000000000000000000000000000006",
         "wbtc": "0x68f180fcCe6836688e9084f035309E29Bf0A2095",
         "usdc_decimals": 6,
@@ -172,18 +174,34 @@ class DeFiService:
         eth_wei = await self.w3.eth.get_balance(addr)
         eth_balance = eth_wei / 1e18
 
+        # Check native USDC first, fall back to USDC.e (bridged)
+        decimals = self.net["usdc_decimals"]
+        active_usdc_address = self.net["usdc"]
         usdc_contract = self.w3.eth.contract(
             address=Web3.to_checksum_address(self.net["usdc"]),
             abi=ERC20_ABI,
         )
         usdc_raw = await usdc_contract.functions.balanceOf(addr).call()
-        usdc_balance = usdc_raw / (10 ** self.net["usdc_decimals"])
+        usdc_balance = usdc_raw / (10 ** decimals)
+
+        if usdc_balance < 0.01 and self.net.get("usdc_e"):
+            usdc_e_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(self.net["usdc_e"]),
+                abi=ERC20_ABI,
+            )
+            usdc_e_raw = await usdc_e_contract.functions.balanceOf(addr).call()
+            usdc_e_balance = usdc_e_raw / (10 ** decimals)
+            if usdc_e_balance > usdc_balance:
+                usdc_balance = usdc_e_balance
+                active_usdc_address = self.net["usdc_e"]
+                logger.info("defi_using_usdc_e", wallet=wallet_address, balance=usdc_e_balance)
 
         return {
             "network": self.network,
             "wallet_address": wallet_address,
             "eth_balance": round(eth_balance, 6),
             "usdc_balance": round(usdc_balance, 2),
+            "active_usdc_address": active_usdc_address,
             "connected": True,
         }
 
@@ -308,12 +326,13 @@ class DeFiService:
         amount_usdc: float,
         slippage: float = 0.005,
         fee: int = 3000,
+        usdc_address: str | None = None,
     ) -> dict:
         private_key = decrypt_private_key(private_key_encrypted)
         account = Account.from_key(private_key)
         wallet_addr = account.address
 
-        usdc_addr = Web3.to_checksum_address(self.net["usdc"])
+        usdc_addr = Web3.to_checksum_address(usdc_address or self.net["usdc"])
         token_addr = Web3.to_checksum_address(token_address)
         router_addr = Web3.to_checksum_address(self.net["swap_router"])
 

@@ -211,6 +211,16 @@ class Settings(Base):
         self.notification_settings = payload
 
     @property
+    def real_trade_enabled(self) -> bool:
+        return bool((self.notification_settings or {}).get("real_trade_enabled", False))
+
+    @real_trade_enabled.setter
+    def real_trade_enabled(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["real_trade_enabled"] = bool(value)
+        self.notification_settings = payload
+
+    @property
     def scan_all_coins(self) -> bool:
         return bool((self.notification_settings or {}).get("scan_all_coins", False))
 

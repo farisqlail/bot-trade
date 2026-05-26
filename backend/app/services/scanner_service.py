@@ -112,6 +112,7 @@ class ScannerService:
             if is_buy and not in_position:
                 balance_info = await service.get_balance(settings.defi_wallet_address)
                 usdc_available = balance_info["usdc_balance"]
+                active_usdc = balance_info.get("active_usdc_address")
                 trade_amount = round(usdc_available * (settings.defi_trade_percent / 100), 2)
                 if trade_amount < 0.5:
                     logger.info("defi_skip_buy_low_usdc", user_id=user_id, symbol=symbol, usdc=usdc_available)
@@ -122,6 +123,7 @@ class ScannerService:
                     trade_amount,
                     slippage=settings.defi_slippage / 100,
                     fee=token_fee,
+                    usdc_address=active_usdc,
                 )
             elif is_sell and in_position:
                 result = await service.sell_all_to_usdc(
@@ -147,6 +149,110 @@ class ScannerService:
             )
             logger.info("defi_trade_success", user_id=user_id, symbol=symbol, action=action, tx=result.get("tx_hash"))
 
+        return result
+
+    async def _execute_real_trade(self, user_id: int, settings: Settings, opportunity: dict) -> dict | None:
+        from app.services.bybit_order_service import BybitOrderService
+        from app.services.telegram_service import TelegramService
+
+        api_key = settings.polymarket_api_key
+        api_secret = settings.polymarket_api_secret
+        if not api_key or not api_secret:
+            logger.warning("real_trade_skip_no_api_key", user_id=user_id)
+            return None
+
+        symbol = opportunity["symbol"]
+        action = opportunity.get("recommended_action")
+        is_long = action in {"BUY", "STRONG_BUY"}
+        is_short = action in {"SELL", "STRONG_SELL"}
+        if not is_long and not is_short:
+            return None
+
+        side = "Buy" if is_long else "Sell"
+        direction = TradeDirection.LONG if is_long else TradeDirection.SHORT
+        testnet = settings.use_public_data_only
+        order_svc = BybitOrderService(api_key=api_key, api_secret=api_secret, testnet=testnet)
+
+        # Skip if position already open for this symbol
+        try:
+            positions = await order_svc.get_positions(symbol=symbol)
+            for pos in positions:
+                if pos.get("symbol") == symbol and float(pos.get("size", 0)) > 0:
+                    logger.info("real_trade_skip_position_exists", user_id=user_id, symbol=symbol)
+                    return None
+        except Exception as exc:
+            logger.warning("real_trade_position_check_failed", symbol=symbol, error=str(exc))
+            return None
+
+        try:
+            balance = await order_svc.get_wallet_balance(coin="USDT")
+        except Exception as exc:
+            logger.warning("real_trade_balance_failed", user_id=user_id, error=str(exc))
+            return None
+
+        if balance < 1.0:
+            logger.info("real_trade_skip_low_balance", user_id=user_id, balance=balance)
+            return None
+
+        entry_price = opportunity.get("suggested_entry") or 0.0
+        if not entry_price:
+            return None
+
+        risk_amount = balance * (settings.risk_percent / 100)
+        raw_qty = risk_amount / entry_price
+        qty_str = f"{raw_qty:.3f}"
+
+        try:
+            await order_svc.set_leverage(symbol, settings.leverage)
+        except Exception as exc:
+            logger.warning("real_trade_set_leverage_failed", symbol=symbol, error=str(exc))
+
+        try:
+            result = await order_svc.place_order(
+                symbol=symbol,
+                side=side,
+                qty=qty_str,
+                stop_loss=opportunity.get("suggested_sl"),
+                take_profit=opportunity.get("suggested_tp"),
+            )
+        except Exception as exc:
+            logger.error("real_trade_order_failed", user_id=user_id, symbol=symbol, side=side, error=str(exc))
+            return None
+
+        order_id = result.get("orderId")
+        avg_price = float(result.get("avgPrice") or entry_price or 0) or entry_price
+
+        trade = Trade(
+            user_id=user_id,
+            exchange_order_id=order_id,
+            symbol=symbol,
+            direction=direction,
+            status=TradeStatus.OPEN,
+            entry_price=avg_price,
+            stop_loss=opportunity["suggested_sl"],
+            take_profit=opportunity["suggested_tp"],
+            quantity=raw_qty,
+            leverage=settings.leverage,
+            risk_amount=risk_amount,
+            risk_percent=settings.risk_percent,
+            notes=f"real_trade:auto:{action}",
+            opened_at=datetime.now(timezone.utc),
+        )
+        self.db.add(trade)
+        await self.db.flush()
+
+        emoji = "🟢" if is_long else "🔴"
+        await TelegramService().send_message(
+            f"⚡ <b>Real Trade Executed</b>\n\n"
+            f"Pair: <code>{symbol}</code>\n"
+            f"Direction: {emoji} {action}\n"
+            f"Entry: <code>${avg_price:,.4f}</code>\n"
+            f"SL: <code>${opportunity['suggested_sl']:,.4f}</code>\n"
+            f"TP: <code>${opportunity['suggested_tp']:,.4f}</code>\n"
+            f"Qty: <code>{qty_str}</code> | Leverage: {settings.leverage}x\n"
+            f"Order ID: <code>{order_id}</code>"
+        )
+        logger.info("real_trade_success", user_id=user_id, symbol=symbol, side=side, order_id=order_id)
         return result
 
     async def _open_paper_trade_if_needed(self, user_id: int, settings: Settings, opportunity: dict):
@@ -308,6 +414,30 @@ class ScannerService:
 
         if (
             settings
+            and settings.real_trade_enabled
+            and settings.auto_trade
+            and settings.polymarket_api_key
+            and settings.polymarket_api_secret
+            and opportunities
+        ):
+            for candidate in opportunities[:3]:
+                if candidate.get("recommended_action") not in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
+                    continue
+                try:
+                    real_result = await asyncio.wait_for(
+                        self._execute_real_trade(user_id, settings, candidate),
+                        timeout=30,
+                    )
+                    if real_result:
+                        candidate["real_order_id"] = real_result.get("orderId")
+                        break
+                except asyncio.TimeoutError:
+                    logger.warning("real_trade_timeout", user_id=user_id, symbol=candidate["symbol"])
+                except Exception as exc:
+                    logger.warning("real_trade_failed", symbol=candidate["symbol"], error=str(exc))
+
+        if (
+            settings
             and settings.defi_enabled
             and settings.defi_wallet_address
             and settings.defi_wallet_private_key_encrypted
@@ -337,8 +467,137 @@ class ScannerService:
                         traded_opp["defi_status"] = defi_result.get("status")
                 except asyncio.TimeoutError:
                     logger.warning("defi_trade_timeout", user_id=user_id, symbol=traded_opp["symbol"])
+                    from app.services.telegram_service import TelegramService
+                    await TelegramService().send_message(
+                        f"⚠️ <b>DeFi Trade Timeout</b>\n<code>{traded_opp['symbol']}</code> — transaction took >180s, skipped."
+                    )
                 except Exception as exc:
                     logger.warning("scanner_defi_trade_failed", symbol=traded_opp["symbol"], error=str(exc))
+                    from app.services.telegram_service import TelegramService
+                    await TelegramService().send_message(
+                        f"⚠️ <b>DeFi Trade Error</b>\n<code>{traded_opp['symbol']}</code>\n<code>{exc}</code>"
+                    )
+
+        for opportunity in opportunities:
+            opportunity.pop("market_data", None)
+
+        return opportunities
+
+    async def scan_specific_symbols(
+        self,
+        user_id: int,
+        symbols: list[str],
+        deep_analysis: bool = True,
+        execute_defi: bool = True,
+    ) -> list[dict]:
+        """Scan specific symbols immediately and optionally execute DeFi trade."""
+        settings = await self._get_settings(user_id)
+        symbols = list(dict.fromkeys(s.upper() for s in symbols))
+
+        fetch_sem = asyncio.Semaphore(3)
+
+        async def _fetch_symbol(symbol: str):
+            async with fetch_sem:
+                for attempt in range(3):
+                    try:
+                        return symbol, await self.exchange_svc.get_market_data(symbol)
+                    except Exception as exc:
+                        if attempt == 2:
+                            logger.warning("scanner_symbol_fetch_failed", symbol=symbol, error=str(exc))
+                            return symbol, None
+                        await asyncio.sleep(1.5 ** attempt)
+
+        fetch_results = await asyncio.gather(*[_fetch_symbol(s) for s in symbols])
+        opportunities = [
+            self._heuristic_signal(symbol, market_data)
+            for symbol, market_data in fetch_results
+            if market_data is not None
+        ]
+
+        if not opportunities:
+            return []
+
+        opportunities.sort(key=lambda item: abs(item["score"]), reverse=True)
+
+        for opp in opportunities:
+            await self.ai_svc.save_heuristic_result(opp["symbol"], opp, opp.get("market_data", {}))
+
+        if deep_analysis and settings and settings.ai_analysis_enabled:
+            async def _run_ai(opportunity: dict):
+                try:
+                    analysis = await self.ai_svc.analyze_market(opportunity["symbol"], opportunity["market_data"])
+                    opportunity.update(
+                        {
+                            "trend": analysis.trend or opportunity["trend"],
+                            "sentiment": analysis.sentiment or opportunity["sentiment"],
+                            "recommended_action": analysis.recommended_action or opportunity["recommended_action"],
+                            "suggested_entry": analysis.suggested_entry or opportunity["suggested_entry"],
+                            "suggested_sl": analysis.suggested_sl or opportunity["suggested_sl"],
+                            "suggested_tp": analysis.suggested_tp or opportunity["suggested_tp"],
+                            "analysis_text": analysis.analysis_text,
+                            "confidence": analysis.confidence if analysis.confidence is not None else opportunity["confidence"],
+                            "analysis_id": analysis.id,
+                            "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
+                        }
+                    )
+                except Exception as exc:
+                    logger.warning("scanner_ai_analysis_failed", symbol=opportunity["symbol"], error=str(exc))
+
+            await asyncio.gather(*[_run_ai(opp) for opp in opportunities])
+
+        if (
+            execute_defi
+            and settings
+            and settings.defi_enabled
+            and settings.defi_wallet_address
+            and settings.defi_wallet_private_key_encrypted
+            and opportunities
+        ):
+            from app.services.defi_service import DeFiService
+            _defi_svc = DeFiService(network=settings.defi_network or "arbitrum")
+            for candidate in opportunities:
+                if candidate.get("recommended_action") not in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
+                    continue
+                token_addr = await _defi_svc.get_token_address(candidate["symbol"])
+                if not token_addr:
+                    continue
+                try:
+                    defi_result = await asyncio.wait_for(
+                        self._execute_defi_trade(user_id, settings, candidate),
+                        timeout=180,
+                    )
+                    if defi_result:
+                        candidate["defi_tx"] = defi_result.get("tx_hash")
+                        candidate["defi_status"] = defi_result.get("status")
+                except asyncio.TimeoutError:
+                    logger.warning("defi_trade_timeout", user_id=user_id, symbol=candidate["symbol"])
+                except Exception as exc:
+                    logger.warning("scanner_defi_trade_failed", symbol=candidate["symbol"], error=str(exc))
+                break
+
+        if (
+            settings
+            and settings.real_trade_enabled
+            and settings.auto_trade
+            and settings.polymarket_api_key
+            and settings.polymarket_api_secret
+            and opportunities
+        ):
+            for candidate in opportunities:
+                if candidate.get("recommended_action") not in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
+                    continue
+                try:
+                    real_result = await asyncio.wait_for(
+                        self._execute_real_trade(user_id, settings, candidate),
+                        timeout=30,
+                    )
+                    if real_result:
+                        candidate["real_order_id"] = real_result.get("orderId")
+                        break
+                except asyncio.TimeoutError:
+                    logger.warning("real_trade_timeout", user_id=user_id, symbol=candidate["symbol"])
+                except Exception as exc:
+                    logger.warning("real_trade_failed", symbol=candidate["symbol"], error=str(exc))
 
         for opportunity in opportunities:
             opportunity.pop("market_data", None)
