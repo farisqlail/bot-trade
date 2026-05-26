@@ -49,3 +49,6 @@ Thumbs.db
 nginx/ssl/*.pem
 nginx/ssl/*.crt
 nginx/ssl/*.key
+
+# Claude Code memory and session data — never commit
+.claude/

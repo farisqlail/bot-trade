@@ -99,23 +99,50 @@ class ScannerService:
 
         token_fee = service.get_token_fee(symbol)
 
+        from app.services.telegram_service import TelegramService as _TG
+
         try:
             token_raw, _ = await service.get_token_balance(settings.defi_wallet_address, token_address)
         except Exception as exc:
             logger.warning("defi_balance_check_failed", symbol=symbol, error=str(exc))
+            await _TG().send_message(
+                f"⚠️ <b>DeFi Skip</b> <code>{symbol}</code>\nBalance check failed: <code>{exc}</code>"
+            )
             return None
 
         in_position = token_raw > 0
         result = None
 
+        if is_buy and in_position:
+            logger.info("defi_skip_already_in_position", symbol=symbol)
+            await _TG().send_message(
+                f"ℹ️ <b>DeFi Skip BUY</b> <code>{symbol}</code>\nAlready holding token — in position, skip buy."
+            )
+            return None
+
+        if is_sell and not in_position:
+            logger.info("defi_skip_no_position_to_sell", symbol=symbol)
+            token_label = symbol.replace("USDT", "").replace("BUSD", "").replace("USDC", "")
+            await _TG().send_message(
+                f"ℹ️ <b>DeFi Skip SELL</b> <code>{symbol}</code>\n"
+                f"No <code>{token_label}</code> held in wallet — bot needs BUY signal first to acquire token.\n"
+                f"<i>Current wallet has only USDC, no {token_label} to sell.</i>"
+            )
+            return None
+
         try:
-            if is_buy and not in_position:
+            if is_buy:
                 balance_info = await service.get_balance(settings.defi_wallet_address)
                 usdc_available = balance_info["usdc_balance"]
                 active_usdc = balance_info.get("active_usdc_address")
                 trade_amount = round(usdc_available * (settings.defi_trade_percent / 100), 2)
                 if trade_amount < 0.5:
                     logger.info("defi_skip_buy_low_usdc", user_id=user_id, symbol=symbol, usdc=usdc_available)
+                    await _TG().send_message(
+                        f"⚠️ <b>DeFi Skip BUY</b> <code>{symbol}</code>\n"
+                        f"USDC available: <code>${usdc_available:.2f}</code> — trade amount <code>${trade_amount:.2f}</code> < $0.50\n"
+                        f"Top-up USDC or increase defi_trade_percent."
+                    )
                     return None
                 result = await service.swap_usdc_to_token(
                     settings.defi_wallet_private_key_encrypted,
@@ -125,7 +152,7 @@ class ScannerService:
                     fee=token_fee,
                     usdc_address=active_usdc,
                 )
-            elif is_sell and in_position:
+            elif is_sell:
                 result = await service.sell_all_to_usdc(
                     settings.defi_wallet_private_key_encrypted,
                     token_address,
@@ -134,6 +161,9 @@ class ScannerService:
                 )
         except Exception as exc:
             logger.error("defi_swap_failed", user_id=user_id, symbol=symbol, action=action, error=str(exc))
+            await _TG().send_message(
+                f"⚠️ <b>DeFi Swap Failed</b> <code>{symbol}</code> {action}\n<code>{exc}</code>"
+            )
             return None
 
         if result and result.get("status") == "success":
@@ -445,10 +475,11 @@ class ScannerService:
         ):
             from app.services.defi_service import DeFiService
             _defi_svc = DeFiService(network=settings.defi_network or "arbitrum")
+            # Prioritize BUY signals first — user likely has USDC, not tokens
+            buy_opps = [c for c in opportunities if c.get("recommended_action") in {"BUY", "STRONG_BUY"}]
+            sell_opps = [c for c in opportunities if c.get("recommended_action") in {"SELL", "STRONG_SELL"}]
             traded_opp = None
-            for candidate in opportunities[:5]:
-                if candidate.get("recommended_action") not in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
-                    continue
+            for candidate in buy_opps + sell_opps:
                 token_addr = await _defi_svc.get_token_address(candidate["symbol"])
                 if not token_addr:
                     logger.info("defi_skip_no_address", symbol=candidate["symbol"])
