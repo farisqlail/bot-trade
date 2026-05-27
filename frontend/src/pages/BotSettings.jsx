@@ -27,6 +27,7 @@ export default function BotSettings() {
           use_public_data_only: res.data.use_public_data_only,
           scanner_watchlist: (res.data.scanner_watchlist || []).join(', '),
           paper_balance: res.data.paper_balance,
+          paper_trade_enabled: res.data.paper_trade_enabled ?? false,
           scan_all_coins: res.data.scan_all_coins ?? false,
           max_scan_coins: res.data.max_scan_coins ?? 50,
           min_volume_filter: res.data.min_volume_filter ?? 5000000,
@@ -40,6 +41,10 @@ export default function BotSettings() {
           defi_trade_percent: res.data.defi_trade_percent ?? 50,
           defi_slippage: res.data.defi_slippage ?? 0.5,
           defi_only_scan: res.data.defi_only_scan ?? false,
+          gmx_enabled: res.data.gmx_enabled ?? false,
+          gmx_leverage: res.data.gmx_leverage ?? 2,
+          gmx_collateral_percent: res.data.gmx_collateral_percent ?? 10,
+          gmx_sl_percent: res.data.gmx_sl_percent ?? 3,
         })
       })
       .catch(console.error)
@@ -235,7 +240,8 @@ export default function BotSettings() {
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
           <h3 className="font-semibold mb-2">Bot Options</h3>
-          <Toggle label="Auto Trade (simulation logic)" name="auto_trade" />
+          <Toggle label="Auto Trade Real — Execute nyata (DeFi/GMX/Bybit) saat ada signal" name="auto_trade" />
+          <Toggle label="Paper Trading (Simulasi) — Catat trade simulasi tanpa uang nyata" name="paper_trade_enabled" />
           <Toggle label="AI Analysis Enabled" name="ai_analysis_enabled" />
           <Toggle label="Use Public Data Only" name="use_public_data_only" />
           <div className="mt-3">
@@ -344,6 +350,32 @@ export default function BotSettings() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+          <h3 className="font-semibold mb-3">GMX Futures — Arbitrum Perpetuals</h3>
+
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 mb-4 text-xs text-blue-300">
+            ⚡ <strong>GMX V2 on-chain futures.</strong> BUY signal = LONG, SELL signal = SHORT. Butuh ETH untuk execution fee (~0.001 ETH/order). Pakai wallet yang sama dengan DeFi Uniswap.
+          </div>
+
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-xs text-yellow-300">
+            ⚠️ <strong>Markets tersedia:</strong> ETHUSDT, ARBUSDT, LINKUSDT, SOLUSDT, AVAXUSDT, GMXUSDT, OPUSDT
+          </div>
+
+          <Toggle label="Enable GMX Futures Trading" name="gmx_enabled" />
+
+          <div className="mt-4 grid grid-cols-3 gap-4">
+            <Field label="Leverage (x)" name="gmx_leverage" type="number" step="0.5" placeholder="2" />
+            <Field label="Collateral per Trade (% USDC)" name="gmx_collateral_percent" type="number" step="5" placeholder="10" />
+            <Field label="Stop-Loss %" name="gmx_sl_percent" type="number" step="0.5" placeholder="3" />
+          </div>
+
+          <div className="mt-3 text-xs text-gray-500 space-y-1">
+            <div>• Collateral 10% + Leverage 2x = Position size 20% USDC per signal</div>
+            <div>• Stop-loss otomatis close position jika harga turun (LONG) atau naik (SHORT) melebihi SL%</div>
+            <div>• Order dieksekusi keeper GMX ~1-10 detik setelah submit</div>
           </div>
         </div>
 

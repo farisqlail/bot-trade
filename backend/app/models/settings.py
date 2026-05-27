@@ -227,6 +227,103 @@ class Settings(Base):
         self.notification_settings = payload
 
     @property
+    def defi_stop_loss_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("defi_stop_loss_percent", 3.0))
+        except (TypeError, ValueError):
+            return 3.0
+
+    @defi_stop_loss_percent.setter
+    def defi_stop_loss_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["defi_stop_loss_percent"] = max(0.5, min(50.0, float(value)))
+        except (TypeError, ValueError):
+            payload["defi_stop_loss_percent"] = 3.0
+        self.notification_settings = payload
+
+    @property
+    def defi_entry_prices(self) -> dict:
+        raw = (self.notification_settings or {}).get("defi_entry_prices", {})
+        return raw if isinstance(raw, dict) else {}
+
+    @defi_entry_prices.setter
+    def defi_entry_prices(self, value: dict):
+        payload = dict(self.notification_settings or {})
+        payload["defi_entry_prices"] = value if isinstance(value, dict) else {}
+        self.notification_settings = payload
+
+    @property
+    def gmx_enabled(self) -> bool:
+        return bool((self.notification_settings or {}).get("gmx_enabled", False))
+
+    @gmx_enabled.setter
+    def gmx_enabled(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["gmx_enabled"] = bool(value)
+        self.notification_settings = payload
+
+    @property
+    def gmx_leverage(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("gmx_leverage", 2.0))
+        except (TypeError, ValueError):
+            return 2.0
+
+    @gmx_leverage.setter
+    def gmx_leverage(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["gmx_leverage"] = max(1.1, min(50.0, float(value)))
+        except (TypeError, ValueError):
+            payload["gmx_leverage"] = 2.0
+        self.notification_settings = payload
+
+    @property
+    def gmx_collateral_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("gmx_collateral_percent", 10.0))
+        except (TypeError, ValueError):
+            return 10.0
+
+    @gmx_collateral_percent.setter
+    def gmx_collateral_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["gmx_collateral_percent"] = max(1.0, min(100.0, float(value)))
+        except (TypeError, ValueError):
+            payload["gmx_collateral_percent"] = 10.0
+        self.notification_settings = payload
+
+    @property
+    def gmx_sl_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("gmx_sl_percent", 3.0))
+        except (TypeError, ValueError):
+            return 3.0
+
+    @gmx_sl_percent.setter
+    def gmx_sl_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["gmx_sl_percent"] = max(0.5, min(50.0, float(value)))
+        except (TypeError, ValueError):
+            payload["gmx_sl_percent"] = 3.0
+        self.notification_settings = payload
+
+    @property
+    def gmx_open_positions(self) -> dict:
+        """Track entry prices: {symbol: {direction, entry_price, size_usd, collateral_usdc}}"""
+        raw = (self.notification_settings or {}).get("gmx_open_positions", {})
+        return raw if isinstance(raw, dict) else {}
+
+    @gmx_open_positions.setter
+    def gmx_open_positions(self, value: dict):
+        payload = dict(self.notification_settings or {})
+        payload["gmx_open_positions"] = value if isinstance(value, dict) else {}
+        self.notification_settings = payload
+
+    @property
     def real_trade_enabled(self) -> bool:
         return bool((self.notification_settings or {}).get("real_trade_enabled", False))
 
@@ -234,6 +331,16 @@ class Settings(Base):
     def real_trade_enabled(self, value: bool):
         payload = dict(self.notification_settings or {})
         payload["real_trade_enabled"] = bool(value)
+        self.notification_settings = payload
+
+    @property
+    def paper_trade_enabled(self) -> bool:
+        return bool((self.notification_settings or {}).get("paper_trade_enabled", False))
+
+    @paper_trade_enabled.setter
+    def paper_trade_enabled(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["paper_trade_enabled"] = bool(value)
         self.notification_settings = payload
 
     @property

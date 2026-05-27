@@ -37,6 +37,11 @@ class SettingsUpdate(BaseModel):
     defi_slippage: Optional[float] = None
     defi_only_scan: Optional[bool] = None
     real_trade_enabled: Optional[bool] = None
+    gmx_enabled: Optional[bool] = None
+    gmx_leverage: Optional[float] = None
+    gmx_collateral_percent: Optional[float] = None
+    gmx_sl_percent: Optional[float] = None
+    paper_trade_enabled: Optional[bool] = None
 
 
 class SettingsResponse(BaseModel):
@@ -74,5 +79,10 @@ class SettingsResponse(BaseModel):
     defi_slippage: float = 0.5
     defi_only_scan: bool = False
     real_trade_enabled: bool = False
+    paper_trade_enabled: bool = False
+    gmx_enabled: bool = False
+    gmx_leverage: float = 2.0
+    gmx_collateral_percent: float = 10.0
+    gmx_sl_percent: float = 3.0
 
     model_config = {"from_attributes": True}

@@ -57,8 +57,11 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
             "/unwatch ETHUSDT — Remove coin from watchlist\n"
             "/watchlist — View active watchlist\n"
             "/scan — Trigger manual scan\n"
-            "/buy ARBUSDT — Force-buy token with USDC (DeFi)\n"
+            "/buy ARBUSDT — Force-buy token with USDC (DeFi → Bybit fallback)\n"
             "/sell ARBUSDT — Force-sell token → USDC (DeFi take profit)\n"
+            "/buygmx ETHUSDT — Open GMX LONG futures position\n"
+            "/sellgmx ETHUSDT — Open GMX SHORT futures position\n"
+            "/gmxpositions — View open GMX positions\n"
             "/help — Show this message"
         )
 
@@ -307,40 +310,184 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
 
     elif cmd == "/buy":
         if not args:
-            return "⚠️ Usage: /buy ARBUSDT\nForce-buy token with USDC via DeFi."
+            return "⚠️ Usage: /buy ARBUSDT\nForce-buy token. Tries DeFi first, falls back to Bybit if token not on Arbitrum."
         symbol = args[0].upper()
         results = []
         for s in all_settings:
-            if not s.defi_enabled or not s.defi_wallet_address or not s.defi_wallet_private_key_encrypted:
-                results.append(f"⚠️ DeFi not configured for user {s.user_id}.")
+            defi_ok = s.defi_enabled and s.defi_wallet_address and s.defi_wallet_private_key_encrypted
+            bybit_ok = s.real_trade_enabled and s.polymarket_api_key and s.polymarket_api_secret
+
+            if not defi_ok and not bybit_ok:
+                results.append(f"⚠️ Neither DeFi nor Bybit configured for user {s.user_id}.")
                 continue
-            from app.services.defi_service import DeFiService
-            svc = DeFiService(network=s.defi_network or "arbitrum")
-            token_address = await svc.get_token_address(symbol)
-            if not token_address:
-                results.append(f"⚠️ <code>{symbol}</code> not found in {s.defi_network} token registry.")
+
+            # Try DeFi first
+            defi_traded = False
+            if defi_ok:
+                from app.services.defi_service import DeFiService
+                svc = DeFiService(network=s.defi_network or "arbitrum")
+                token_address = await svc.get_token_address(symbol)
+                if token_address:
+                    try:
+                        balance_info = await svc.get_balance(s.defi_wallet_address)
+                        usdc = balance_info["usdc_balance"]
+                        active_usdc = balance_info.get("active_usdc_address")
+                        trade_amount = round(usdc * (s.defi_trade_percent / 100), 2)
+                        if trade_amount < 0.5:
+                            results.append(f"⚠️ USDC too low: ${usdc:.2f} (trade amount ${trade_amount:.2f} < $0.50)")
+                            defi_traded = True  # don't fallback, it's a balance issue
+                        else:
+                            result = await svc.swap_usdc_to_token(
+                                s.defi_wallet_private_key_encrypted,
+                                token_address,
+                                trade_amount,
+                                slippage=s.defi_slippage / 100,
+                                fee=svc.get_token_fee(symbol),
+                                usdc_address=active_usdc,
+                            )
+                            tx = result.get("tx_hash", "")
+                            results.append(f"✅ <b>DeFi BUY</b> <code>{symbol}</code> — spent ${trade_amount:.2f} USDC\nTx: <code>{tx}</code>")
+                            defi_traded = True
+                    except Exception as exc:
+                        results.append(f"⚠️ <b>DeFi BUY Failed</b> <code>{symbol}</code>\n<code>{exc}</code>")
+                        defi_traded = True  # attempted but failed, still try Bybit
+
+            # Bybit fallback: if DeFi not configured or token not on Arbitrum
+            if not defi_traded and bybit_ok:
+                try:
+                    from app.services.bybit_order_service import BybitOrderService
+                    from app.services.exchange_service import ExchangeService
+                    testnet = s.use_public_data_only
+                    order_svc = BybitOrderService(
+                        api_key=s.polymarket_api_key,
+                        api_secret=s.polymarket_api_secret,
+                        testnet=testnet,
+                    )
+                    ticker = await ExchangeService().get_ticker(symbol)
+                    price = float(ticker.get("price") or 0)
+                    if price <= 0:
+                        results.append(f"⚠️ <b>Bybit BUY Failed</b> <code>{symbol}</code>\nCould not get price.")
+                        continue
+                    balance = await order_svc.get_wallet_balance(coin="USDT")
+                    if balance < 1.0:
+                        results.append(f"⚠️ Bybit USDT balance too low: ${balance:.2f}")
+                        continue
+                    risk_amount = balance * (s.risk_percent / 100)
+                    qty_str = f"{risk_amount / price:.3f}"
+                    try:
+                        await order_svc.set_leverage(symbol, s.leverage)
+                    except Exception:
+                        pass
+                    order = await order_svc.place_order(
+                        symbol=symbol,
+                        side="Buy",
+                        qty=qty_str,
+                        order_type="Market",
+                    )
+                    order_id = order.get("orderId", "N/A")
+                    results.append(
+                        f"✅ <b>Bybit BUY</b> <code>{symbol}</code>\n"
+                        f"Price: <code>${price:,.4f}</code> | Qty: <code>{qty_str}</code>\n"
+                        f"Order ID: <code>{order_id}</code>\n"
+                        f"ℹ️ DeFi skipped — token tidak tersedia di Arbitrum"
+                    )
+                except Exception as exc:
+                    results.append(f"⚠️ <b>Bybit BUY Failed</b> <code>{symbol}</code>\n<code>{exc}</code>")
+            elif not defi_traded and not bybit_ok:
+                results.append(f"⚠️ <code>{symbol}</code> tidak tersedia di DeFi dan Bybit tidak dikonfigurasi.")
+
+        return "\n\n".join(results) if results else "No settings found."
+
+    elif cmd in ("/buygmx", "/sellgmx"):
+        if not args:
+            return f"⚠️ Usage: {cmd} ETHUSDT\nOpen GMX futures position. Markets: ETHUSDT, ARBUSDT, LINKUSDT, SOLUSDT, AVAXUSDT, GMXUSDT, OPUSDT"
+        symbol = args[0].upper()
+        is_long = cmd == "/buygmx"
+        results = []
+        for s in all_settings:
+            if not s.gmx_enabled:
+                results.append(f"⚠️ GMX not enabled for user {s.user_id}. Enable via bot settings.")
+                continue
+            if not s.defi_wallet_address or not s.defi_wallet_private_key_encrypted:
+                results.append(f"⚠️ Wallet not configured for user {s.user_id}.")
+                continue
+            from app.services.gmx_service import GMXService
+            from app.services.exchange_service import ExchangeService
+            svc = GMXService()
+            if not svc.supports_symbol(symbol):
+                markets = ", ".join(GMXService.get_available_markets()[i]["symbol"] for i in range(len(GMXService.get_available_markets())))
+                results.append(f"⚠️ <code>{symbol}</code> not in GMX markets.\nAvailable: {markets}")
                 continue
             try:
-                balance_info = await svc.get_balance(s.defi_wallet_address)
-                usdc = balance_info["usdc_balance"]
-                active_usdc = balance_info.get("active_usdc_address")
-                trade_amount = round(usdc * (s.defi_trade_percent / 100), 2)
-                if trade_amount < 0.5:
-                    results.append(f"⚠️ USDC too low: ${usdc:.2f} (trade amount ${trade_amount:.2f} < $0.50)")
+                ticker = await ExchangeService().get_ticker(symbol)
+                current_price = float(ticker.get("price") or 0)
+                if current_price <= 0:
+                    results.append(f"⚠️ Cannot get price for <code>{symbol}</code>.")
                     continue
-                result = await svc.swap_usdc_to_token(
+                from app.services.defi_service import DeFiService
+                balance_info = await DeFiService(network="arbitrum").get_balance(s.defi_wallet_address)
+                usdc = balance_info["usdc_balance"]
+                collateral = round(usdc * (s.gmx_collateral_percent / 100), 2)
+                if collateral < 1.0:
+                    results.append(f"⚠️ USDC too low: ${usdc:.2f} (collateral ${collateral:.2f} < $1.00)")
+                    continue
+                result = await svc.open_position(
                     s.defi_wallet_private_key_encrypted,
-                    token_address,
-                    trade_amount,
-                    slippage=s.defi_slippage / 100,
-                    fee=svc.get_token_fee(symbol),
-                    usdc_address=active_usdc,
+                    symbol,
+                    is_long=is_long,
+                    collateral_usdc=collateral,
+                    leverage=s.gmx_leverage,
+                    current_price=current_price,
                 )
-                tx = result.get("tx_hash", "")
-                results.append(f"✅ <b>DeFi BUY</b> <code>{symbol}</code> — spent ${trade_amount:.2f} USDC\nTx: <code>{tx}</code>")
+                if result.get("status") == "success":
+                    direction = "LONG 📈" if is_long else "SHORT 📉"
+                    results.append(
+                        f"⚡ <b>GMX {'BUY' if is_long else 'SELL'} Executed</b>\n"
+                        f"Pair: <code>{symbol}</code> | {direction}\n"
+                        f"Collateral: <code>${collateral:.2f}</code> USDC\n"
+                        f"Size: <code>${result.get('size_usd', 0):.2f}</code> ({s.gmx_leverage}x)\n"
+                        f"Entry: <code>${current_price:,.4f}</code>\n"
+                        f"Tx: <code>{result.get('tx_hash')}</code>\n"
+                        f"⏳ Pending keeper execution (~1-10s)"
+                    )
+                    open_positions = dict(s.gmx_open_positions)
+                    open_positions[symbol] = {
+                        "is_long": is_long,
+                        "entry_price": current_price,
+                        "size_usd": result.get("size_usd", 0.0),
+                        "collateral_usdc": collateral,
+                    }
+                    s.gmx_open_positions = open_positions
+                    await db.commit()
+                else:
+                    results.append(f"⚠️ <b>GMX Failed</b> <code>{symbol}</code>\n<code>{result.get('error')}</code>")
             except Exception as exc:
-                results.append(f"⚠️ <b>BUY Failed</b> <code>{symbol}</code>\n<code>{exc}</code>")
-        return "\n\n".join(results) if results else "No DeFi settings found."
+                results.append(f"⚠️ <b>GMX Error</b> <code>{symbol}</code>\n<code>{exc}</code>")
+        return "\n\n".join(results) if results else "No GMX settings found."
+
+    elif cmd == "/gmxpositions":
+        results = []
+        for s in all_settings:
+            if not s.gmx_enabled or not s.defi_wallet_address:
+                continue
+            from app.services.gmx_service import GMXService
+            svc = GMXService()
+            try:
+                positions = await svc.get_positions(s.defi_wallet_address)
+                if not positions:
+                    results.append(f"ℹ️ No open GMX positions for user {s.user_id}.")
+                    continue
+                lines = [f"📊 <b>GMX Open Positions</b> (user {s.user_id})\n"]
+                for pos in positions:
+                    direction = "📈 LONG" if pos["is_long"] else "📉 SHORT"
+                    lines.append(
+                        f"• <code>{pos['symbol']}</code> {direction}\n"
+                        f"  Size: <code>${pos['size_usd']:,.2f}</code> | Collateral: <code>${pos['collateral_usdc']:,.2f}</code>"
+                    )
+                results.append("\n".join(lines))
+            except Exception as exc:
+                results.append(f"⚠️ GMX positions error: <code>{exc}</code>")
+        return "\n\n".join(results) if results else "No GMX-enabled users found."
 
     return f"❓ Unknown command: <code>{cmd}</code>. Use /help."
 

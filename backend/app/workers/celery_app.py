@@ -47,5 +47,9 @@ celery_app.conf.update(
             "task": "app.workers.tasks.monitor_bybit_positions",
             "schedule": 60.0,  # sync Bybit positions, signal-exit, move SL to breakeven
         },
+        "monitor-gmx-positions": {
+            "task": "app.workers.tasks.monitor_gmx_positions",
+            "schedule": 60.0,  # check GMX futures positions, stop-loss on price drop
+        },
     },
 )

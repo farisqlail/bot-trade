@@ -55,19 +55,26 @@ def scan_market_opportunities(self):
             scanner = ScannerService(db)
 
             for s in active_settings:
-                if s.auto_trade:
-                    mode = "defi" if (s.defi_enabled and s.defi_wallet_address) else "paper"
+                if s.auto_trade or s.paper_trade_enabled:
+                    if s.gmx_enabled and s.defi_wallet_address:
+                        mode = "gmx"
+                    elif s.defi_enabled and s.defi_wallet_address:
+                        mode = "defi"
+                    elif s.real_trade_enabled and s.polymarket_api_key:
+                        mode = "bybit"
+                    else:
+                        mode = "paper"
                     coin_count = s.max_scan_coins if s.scan_all_coins else 30
                     await telegram.notify_bot_started(
                         coin_count=coin_count,
-                        auto_trade=True,
+                        auto_trade=s.auto_trade or s.paper_trade_enabled,
                         mode=mode,
                     )
 
                 opportunities = await scanner.scan_opportunities(
                     user_id=s.user_id,
                     deep_analysis=True,
-                    execute_paper=s.auto_trade,
+                    execute_paper=s.paper_trade_enabled,
                 )
                 await telegram.notify_scan_results(opportunities)
 
@@ -468,12 +475,32 @@ def monitor_defi_positions(self):
                         sentiment_score = float(market_data.get("polymarket_bias_score") or 0.0)
                         score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
 
-                        if score > -0.001:
+                        # Stop-loss check: sell immediately if price drops below entry * (1 - sl_pct)
+                        entry_prices = s.defi_entry_prices
+                        entry_price = float(entry_prices.get(symbol, 0.0))
+                        sl_pct = s.defi_stop_loss_percent / 100.0
+                        is_stop_loss = (
+                            entry_price > 0
+                            and current_price > 0
+                            and current_price <= entry_price * (1.0 - sl_pct)
+                        )
+
+                        if not is_stop_loss and score > -0.001:
                             logger.info("defi_monitor_holding_ok", symbol=symbol, network=network, score=round(score, 4), price=current_price)
                             continue
 
-                        action = "STRONG_SELL" if score <= -0.005 else "SELL"
-                        logger.info("defi_monitor_sell_triggered", symbol=symbol, network=network, action=action, score=round(score, 4), user_id=s.user_id)
+                        if is_stop_loss:
+                            action = "STOP_LOSS"
+                            loss_pct = (entry_price - current_price) / entry_price * 100
+                            logger.warning(
+                                "defi_monitor_stop_loss_triggered",
+                                symbol=symbol, network=network,
+                                entry=entry_price, current=current_price,
+                                loss_pct=round(loss_pct, 2), user_id=s.user_id,
+                            )
+                        else:
+                            action = "STRONG_SELL" if score <= -0.005 else "SELL"
+                            logger.info("defi_monitor_sell_triggered", symbol=symbol, network=network, action=action, score=round(score, 4), user_id=s.user_id)
 
                         try:
                             sell_result = await asyncio.wait_for(
@@ -489,12 +516,25 @@ def monitor_defi_positions(self):
                             if status == "no_balance":
                                 continue
                             tx = sell_result.get("tx_hash", "N/A")
-                            await TelegramService().send_message(
-                                f"🔴 <b>DeFi Auto-Exit</b> <code>{symbol}</code> [{network}]\n"
-                                f"Signal: <b>{action}</b> (score {score:+.4f})\n"
-                                f"Price: <code>${current_price:,.6g}</code>\n"
-                                f"Tx: <code>{tx}</code>"
-                            )
+                            if is_stop_loss:
+                                await TelegramService().send_message(
+                                    f"🛑 <b>DeFi Stop-Loss Triggered</b> <code>{symbol}</code> [{network}]\n"
+                                    f"Entry: <code>${entry_price:,.6g}</code> → Now: <code>${current_price:,.6g}</code>\n"
+                                    f"Loss: <code>{loss_pct:.2f}%</code> (SL: {s.defi_stop_loss_percent}%)\n"
+                                    f"Tx: <code>{tx}</code>"
+                                )
+                            else:
+                                await TelegramService().send_message(
+                                    f"🔴 <b>DeFi Auto-Exit</b> <code>{symbol}</code> [{network}]\n"
+                                    f"Signal: <b>{action}</b> (score {score:+.4f})\n"
+                                    f"Price: <code>${current_price:,.6g}</code>\n"
+                                    f"Tx: <code>{tx}</code>"
+                                )
+                            # Clear entry price after any successful sell
+                            updated_entries = dict(s.defi_entry_prices)
+                            updated_entries.pop(symbol, None)
+                            s.defi_entry_prices = updated_entries
+                            await db.commit()
                         except asyncio.TimeoutError:
                             logger.warning("defi_monitor_sell_timeout", symbol=symbol, network=network)
                             await TelegramService().send_message(
@@ -510,3 +550,124 @@ def monitor_defi_positions(self):
         run_async(_run())
     except Exception as exc:
         logger.error("monitor_defi_positions_error", error=str(exc))
+
+
+@celery_app.task(name="app.workers.tasks.monitor_gmx_positions", bind=True)
+def monitor_gmx_positions(self):
+    async def _run():
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import select
+        from app.models.settings import Settings
+        from app.services.gmx_service import GMXService
+        from app.services.exchange_service import ExchangeService
+        from app.services.telegram_service import TelegramService
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Settings).where(
+                    Settings.bot_enabled == True,
+                    Settings.auto_trade == True,
+                )
+            )
+            active_settings = result.scalars().all()
+            exchange_svc = ExchangeService()
+
+            for s in active_settings:
+                if not s.gmx_enabled:
+                    continue
+                if not s.defi_wallet_address or not s.defi_wallet_private_key_encrypted:
+                    continue
+
+                open_positions = dict(s.gmx_open_positions)
+                if not open_positions:
+                    continue
+
+                svc = GMXService()
+                sl_pct = s.gmx_sl_percent / 100.0
+
+                for symbol, pos_info in list(open_positions.items()):
+                    is_long = pos_info.get("is_long", True)
+                    entry_price = float(pos_info.get("entry_price", 0.0))
+                    size_usd = float(pos_info.get("size_usd", 0.0))
+
+                    if entry_price <= 0 or size_usd <= 0:
+                        continue
+
+                    try:
+                        market_data = await exchange_svc.get_market_data(symbol)
+                    except Exception as exc:
+                        logger.warning("gmx_monitor_price_failed", symbol=symbol, error=str(exc))
+                        continue
+
+                    current_price = float(market_data.get("price") or 0.0)
+                    if current_price <= 0:
+                        continue
+
+                    # Stop-loss: LONG → price fell; SHORT → price rose
+                    if is_long:
+                        is_sl = current_price <= entry_price * (1.0 - sl_pct)
+                        loss_pct = (entry_price - current_price) / entry_price * 100
+                    else:
+                        is_sl = current_price >= entry_price * (1.0 + sl_pct)
+                        loss_pct = (current_price - entry_price) / entry_price * 100
+
+                    if not is_sl:
+                        logger.info(
+                            "gmx_monitor_holding",
+                            symbol=symbol, direction="LONG" if is_long else "SHORT",
+                            entry=entry_price, current=current_price,
+                        )
+                        continue
+
+                    logger.warning(
+                        "gmx_monitor_stop_loss",
+                        symbol=symbol, is_long=is_long,
+                        entry=entry_price, current=current_price,
+                        loss_pct=round(loss_pct, 2),
+                    )
+
+                    try:
+                        close_result = await asyncio.wait_for(
+                            svc.close_position(
+                                s.defi_wallet_private_key_encrypted,
+                                symbol, is_long, size_usd,
+                                current_price=current_price,
+                            ),
+                            timeout=180,
+                        )
+                        if close_result.get("status") == "success":
+                            tx = close_result.get("tx_hash", "N/A")
+                            direction_str = "LONG" if is_long else "SHORT"
+                            await TelegramService().send_message(
+                                f"🛑 <b>GMX Stop-Loss Triggered</b> <code>{symbol}</code>\n"
+                                f"Direction: <b>{direction_str}</b>\n"
+                                f"Entry: <code>${entry_price:,.6g}</code> → Now: <code>${current_price:,.6g}</code>\n"
+                                f"Loss: <code>{loss_pct:.2f}%</code> (SL: {s.gmx_sl_percent}%)\n"
+                                f"Size closed: <code>${size_usd:.2f}</code>\n"
+                                f"Tx: <code>{tx}</code>\n"
+                                f"⚠️ Close order pending keeper execution"
+                            )
+                            open_positions.pop(symbol, None)
+                            s.gmx_open_positions = open_positions
+                            await db.commit()
+                        else:
+                            logger.error("gmx_sl_close_failed", symbol=symbol, error=close_result.get("error"))
+                            await TelegramService().send_message(
+                                f"⚠️ <b>GMX SL Close Failed</b> <code>{symbol}</code>\n"
+                                f"<code>{close_result.get('error')}</code>"
+                            )
+                    except asyncio.TimeoutError:
+                        logger.warning("gmx_sl_close_timeout", symbol=symbol)
+                        await TelegramService().send_message(
+                            f"⚠️ <b>GMX SL Close Timeout</b> <code>{symbol}</code>\nTransaction took >180s."
+                        )
+                    except Exception as exc:
+                        logger.error("gmx_sl_close_error", symbol=symbol, error=str(exc))
+                        await TelegramService().send_message(
+                            f"⚠️ <b>GMX SL Close Error</b> <code>{symbol}</code>\n<code>{exc}</code>"
+                        )
+
+    try:
+        run_async(_run())
+    except Exception as exc:
+        logger.error("monitor_gmx_positions_error", error=str(exc))

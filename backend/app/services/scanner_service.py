@@ -181,6 +181,126 @@ class ScannerService:
             )
             logger.info("defi_trade_success", user_id=user_id, symbol=symbol, action=action, tx=result.get("tx_hash"))
 
+            entry_prices = dict(settings.defi_entry_prices)
+            if is_buy:
+                entry_price = float(opportunity.get("price_at_analysis") or 0.0)
+                if entry_price > 0:
+                    entry_prices[symbol] = entry_price
+                    logger.info("defi_entry_price_stored", symbol=symbol, entry_price=entry_price)
+            else:
+                entry_prices.pop(symbol, None)
+            settings.defi_entry_prices = entry_prices
+            await self.db.commit()
+
+        return result
+
+    async def _execute_gmx_trade(self, user_id: int, settings: Settings, opportunity: dict) -> dict | None:
+        from app.services.gmx_service import GMXService
+        from app.services.telegram_service import TelegramService as _TG
+
+        symbol = opportunity["symbol"]
+        action = opportunity.get("recommended_action")
+        is_buy = action in {"BUY", "STRONG_BUY"}
+        is_sell = action in {"SELL", "STRONG_SELL"}
+        if not is_buy and not is_sell:
+            return None
+
+        svc = GMXService()
+        if not svc.supports_symbol(symbol):
+            return None
+
+        is_long = is_buy  # BUY = LONG, SELL = SHORT
+        current_price = float(opportunity.get("price_at_analysis") or 0.0)
+
+        open_positions = dict(settings.gmx_open_positions)
+        existing = open_positions.get(symbol)
+
+        # Skip if same direction already open
+        if existing and existing.get("is_long") == is_long:
+            logger.info("gmx_skip_same_position", symbol=symbol, direction="LONG" if is_long else "SHORT")
+            return None
+
+        # Close opposite direction position first
+        if existing and existing.get("is_long") != is_long:
+            close_result = await svc.close_position(
+                settings.defi_wallet_private_key_encrypted,
+                symbol,
+                existing["is_long"],
+                existing.get("size_usd", 0.0),
+                current_price=current_price,
+            )
+            if close_result.get("status") == "success":
+                open_positions.pop(symbol, None)
+                settings.gmx_open_positions = open_positions
+                await self.db.commit()
+                await _TG().send_message(
+                    f"🔄 <b>GMX Position Closed</b> <code>{symbol}</code>\n"
+                    f"Direction: {'LONG' if existing['is_long'] else 'SHORT'} → closing before flip\n"
+                    f"Tx: <code>{close_result.get('tx_hash')}</code>"
+                )
+            else:
+                logger.error("gmx_close_for_flip_failed", symbol=symbol, error=close_result.get("error"))
+                return None
+
+        # Get USDC balance for collateral calc
+        try:
+            from app.services.defi_service import DeFiService
+            balance_info = await DeFiService(network="arbitrum").get_balance(settings.defi_wallet_address)
+            usdc_available = balance_info["usdc_balance"]
+        except Exception as exc:
+            logger.error("gmx_balance_check_failed", symbol=symbol, error=str(exc))
+            from app.services.telegram_service import TelegramService as _TG
+            await _TG().send_message(
+                f"⚠️ <b>GMX Skip</b> <code>{symbol}</code>\n"
+                f"Balance check failed: <code>{exc}</code>\n"
+                f"Pastikan Alchemy/RPC tersedia dan wallet address benar."
+            )
+            return None
+
+        collateral_usdc = round(usdc_available * (settings.gmx_collateral_percent / 100), 2)
+        if collateral_usdc < 1.0:
+            await _TG().send_message(
+                f"⚠️ <b>GMX Skip</b> <code>{symbol}</code>\n"
+                f"USDC too low: ${usdc_available:.2f} (collateral: ${collateral_usdc:.2f} < $1.00)"
+            )
+            return None
+
+        result = await svc.open_position(
+            settings.defi_wallet_private_key_encrypted,
+            symbol,
+            is_long=is_long,
+            collateral_usdc=collateral_usdc,
+            leverage=settings.gmx_leverage,
+            current_price=current_price,
+        )
+
+        if result.get("status") == "success":
+            emoji = "🟢📈" if is_long else "🔴📉"
+            await _TG().send_message(
+                f"⚡ <b>GMX Futures Opened</b>\n\n"
+                f"Pair: <code>{symbol}</code>\n"
+                f"Direction: {emoji} {'LONG' if is_long else 'SHORT'}\n"
+                f"Collateral: <code>${collateral_usdc:.2f} USDC</code>\n"
+                f"Size: <code>${result.get('size_usd', 0):.2f}</code> ({settings.gmx_leverage}x)\n"
+                f"Entry: <code>${current_price:,.6g}</code>\n"
+                f"Tx: <code>{result.get('tx_hash')}</code>\n"
+                f"⚠️ Order pending keeper execution (~1-10 sec)"
+            )
+            open_positions[symbol] = {
+                "is_long": is_long,
+                "entry_price": current_price,
+                "size_usd": result.get("size_usd", 0.0),
+                "collateral_usdc": collateral_usdc,
+            }
+            settings.gmx_open_positions = open_positions
+            await self.db.commit()
+            logger.info("gmx_trade_success", user_id=user_id, symbol=symbol, direction="LONG" if is_long else "SHORT", tx=result.get("tx_hash"))
+        elif result.get("status") == "error":
+            logger.error("gmx_trade_failed", symbol=symbol, error=result.get("error"))
+            await _TG().send_message(
+                f"⚠️ <b>GMX Trade Failed</b> <code>{symbol}</code>\n<code>{result.get('error')}</code>"
+            )
+
         return result
 
     async def _execute_real_trade(self, user_id: int, settings: Settings, opportunity: dict) -> dict | None:
@@ -435,7 +555,7 @@ class ScannerService:
             ai_limit = 5 if (settings and settings.scan_all_coins) else 3
             await asyncio.gather(*[_run_ai(opp) for opp in opportunities[:ai_limit]])
 
-        if execute_paper and settings and settings.auto_trade:
+        if execute_paper and settings:
             for opportunity in opportunities[:5]:
                 try:
                     trade = await self._open_paper_trade_if_needed(user_id, settings, opportunity)
@@ -526,12 +646,83 @@ class ScannerService:
 
                 if not buy_executed and skipped_buy_symbols:
                     from app.services.telegram_service import TelegramService as _TG2
+
+                    # Auto-fallback to Bybit for skipped DeFi symbols
+                    bybit_fallback_done = False
+                    if (
+                        settings.real_trade_enabled
+                        and settings.auto_trade
+                        and settings.polymarket_api_key
+                        and settings.polymarket_api_secret
+                    ):
+                        for sym in skipped_buy_symbols:
+                            # Find the candidate and check if Bybit already traded it
+                            skipped_candidate = next(
+                                (c for c in buy_opps if c["symbol"] == sym), None
+                            )
+                            if skipped_candidate and not skipped_candidate.get("real_order_id"):
+                                try:
+                                    real_result = await asyncio.wait_for(
+                                        self._execute_real_trade(user_id, settings, skipped_candidate),
+                                        timeout=30,
+                                    )
+                                    if real_result:
+                                        skipped_candidate["real_order_id"] = real_result.get("orderId")
+                                        bybit_fallback_done = True
+                                        logger.info(
+                                            "defi_skip_bybit_fallback_success",
+                                            symbol=sym, order_id=real_result.get("orderId"),
+                                        )
+                                        break
+                                except Exception as exc:
+                                    logger.warning("defi_skip_bybit_fallback_failed", symbol=sym, error=str(exc))
+
                     sym_list = ", ".join(f"<code>{s}</code>" for s in skipped_buy_symbols[:5])
-                    await _TG2().send_message(
-                        f"⚠️ <b>DeFi BUY Skipped</b> [{network}]\n"
-                        f"Signal BUY untuk: {sym_list}\n"
-                        f"Token tidak tersedia di DeFi {network}.\n"
-                        f"Gunakan Bybit untuk trade token ini."
+                    if bybit_fallback_done:
+                        await _TG2().send_message(
+                            f"ℹ️ <b>DeFi BUY Skipped → Bybit Fallback</b> [{network}]\n"
+                            f"Token: {sym_list}\n"
+                            f"Tidak tersedia di DeFi {network} — trade dialihkan ke Bybit ✅"
+                        )
+                    else:
+                        await _TG2().send_message(
+                            f"⚠️ <b>DeFi BUY Skipped</b> [{network}]\n"
+                            f"Signal BUY untuk: {sym_list}\n"
+                            f"Token tidak tersedia di DeFi {network}.\n"
+                            f"Bybit: {'tidak dikonfigurasi' if not settings.real_trade_enabled else 'sudah dicoba sebelumnya'}"
+                        )
+
+        if (
+            settings
+            and settings.gmx_enabled
+            and settings.auto_trade
+            and settings.defi_wallet_address
+            and settings.defi_wallet_private_key_encrypted
+            and opportunities
+        ):
+            for candidate in opportunities[:3]:
+                action = candidate.get("recommended_action")
+                if action not in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
+                    continue
+                try:
+                    gmx_result = await asyncio.wait_for(
+                        self._execute_gmx_trade(user_id, settings, candidate),
+                        timeout=180,
+                    )
+                    if gmx_result and gmx_result.get("status") == "success":
+                        candidate["gmx_tx"] = gmx_result.get("tx_hash")
+                        candidate["gmx_direction"] = gmx_result.get("direction")
+                except asyncio.TimeoutError:
+                    logger.warning("gmx_trade_timeout", user_id=user_id, symbol=candidate["symbol"])
+                    from app.services.telegram_service import TelegramService as _TGMX
+                    await _TGMX().send_message(
+                        f"⚠️ <b>GMX Trade Timeout</b> <code>{candidate['symbol']}</code>\nTransaction took >180s."
+                    )
+                except Exception as exc:
+                    logger.warning("gmx_trade_failed", symbol=candidate["symbol"], error=str(exc))
+                    from app.services.telegram_service import TelegramService as _TGMX
+                    await _TGMX().send_message(
+                        f"⚠️ <b>GMX Trade Error</b> <code>{candidate['symbol']}</code>\n<code>{exc}</code>"
                     )
 
         for opportunity in opportunities:
