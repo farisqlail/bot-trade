@@ -336,9 +336,28 @@ class DeFiService:
         token_addr = Web3.to_checksum_address(token_address)
         router_addr = Web3.to_checksum_address(self.net["swap_router"])
 
+        # Pre-flight: verify ETH balance for gas
+        eth_wei = await self.w3.eth.get_balance(Web3.to_checksum_address(wallet_addr))
+        eth_balance = eth_wei / 1e18
+        if eth_balance < 0.0001:
+            raise ValueError(
+                f"Wallet {wallet_addr} has only {eth_balance:.6f} ETH — insufficient for gas. "
+                "Make sure the private key matches your MetaMask wallet that holds ETH."
+            )
+
+        # Pre-flight: verify USDC balance
+        usdc_contract = self.w3.eth.contract(address=usdc_addr, abi=ERC20_ABI)
+        usdc_raw = await usdc_contract.functions.balanceOf(Web3.to_checksum_address(wallet_addr)).call()
         amount_in = int(amount_usdc * (10 ** self.net["usdc_decimals"]))
+        if usdc_raw < amount_in:
+            usdc_available = usdc_raw / (10 ** self.net["usdc_decimals"])
+            raise ValueError(
+                f"Wallet {wallet_addr} USDC balance {usdc_available:.4f} < required {amount_usdc:.4f}. "
+                "Private key may not match the wallet address configured in settings."
+            )
+
         nonce = await self.w3.eth.get_transaction_count(wallet_addr)
-        gas_price = await self.w3.eth.gas_price
+        gas_price = int((await self.w3.eth.gas_price) * 1.3)
 
         await self._approve(private_key, usdc_addr, router_addr, amount_in, nonce, gas_price)
 
@@ -393,7 +412,7 @@ class DeFiService:
             return {"direction": "sell", "status": "no_balance", "message": "No token balance to sell"}
 
         nonce = await self.w3.eth.get_transaction_count(wallet_addr)
-        gas_price = await self.w3.eth.gas_price
+        gas_price = int((await self.w3.eth.gas_price) * 1.3)
 
         await self._approve(private_key, token_addr, router_addr, token_balance, nonce, gas_price)
 

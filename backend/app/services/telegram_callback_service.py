@@ -57,6 +57,8 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
             "/unwatch ETHUSDT — Remove coin from watchlist\n"
             "/watchlist — View active watchlist\n"
             "/scan — Trigger manual scan\n"
+            "/buy ARBUSDT — Force-buy token with USDC (DeFi)\n"
+            "/sell ARBUSDT — Force-sell token → USDC (DeFi take profit)\n"
             "/help — Show this message"
         )
 
@@ -270,6 +272,75 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
             except Exception as exc:
                 lines.append(f"⚠️ Scan failed: {exc}")
         return "\n\n".join(lines) if lines else "No scan results."
+
+    elif cmd == "/sell":
+        if not args:
+            return "⚠️ Usage: /sell ARBUSDT\nForce-sell all held tokens → USDC via DeFi."
+        symbol = args[0].upper()
+        results = []
+        for s in all_settings:
+            if not s.defi_enabled or not s.defi_wallet_address or not s.defi_wallet_private_key_encrypted:
+                results.append(f"⚠️ DeFi not configured for user {s.user_id}.")
+                continue
+            from app.services.defi_service import DeFiService
+            svc = DeFiService(network=s.defi_network or "arbitrum")
+            token_address = await svc.get_token_address(symbol)
+            if not token_address:
+                results.append(f"⚠️ <code>{symbol}</code> not found in {s.defi_network} token registry.")
+                continue
+            try:
+                result = await svc.sell_all_to_usdc(
+                    s.defi_wallet_private_key_encrypted,
+                    token_address,
+                    slippage=s.defi_slippage / 100,
+                    fee=svc.get_token_fee(symbol),
+                )
+                status = result.get("status", "unknown")
+                if status == "no_balance":
+                    results.append(f"ℹ️ <code>{symbol}</code> — no token balance to sell.")
+                else:
+                    tx = result.get("tx_hash", "")
+                    results.append(f"✅ <b>DeFi SELL</b> <code>{symbol}</code> → USDC\nTx: <code>{tx}</code>")
+            except Exception as exc:
+                results.append(f"⚠️ <b>SELL Failed</b> <code>{symbol}</code>\n<code>{exc}</code>")
+        return "\n\n".join(results) if results else "No DeFi settings found."
+
+    elif cmd == "/buy":
+        if not args:
+            return "⚠️ Usage: /buy ARBUSDT\nForce-buy token with USDC via DeFi."
+        symbol = args[0].upper()
+        results = []
+        for s in all_settings:
+            if not s.defi_enabled or not s.defi_wallet_address or not s.defi_wallet_private_key_encrypted:
+                results.append(f"⚠️ DeFi not configured for user {s.user_id}.")
+                continue
+            from app.services.defi_service import DeFiService
+            svc = DeFiService(network=s.defi_network or "arbitrum")
+            token_address = await svc.get_token_address(symbol)
+            if not token_address:
+                results.append(f"⚠️ <code>{symbol}</code> not found in {s.defi_network} token registry.")
+                continue
+            try:
+                balance_info = await svc.get_balance(s.defi_wallet_address)
+                usdc = balance_info["usdc_balance"]
+                active_usdc = balance_info.get("active_usdc_address")
+                trade_amount = round(usdc * (s.defi_trade_percent / 100), 2)
+                if trade_amount < 0.5:
+                    results.append(f"⚠️ USDC too low: ${usdc:.2f} (trade amount ${trade_amount:.2f} < $0.50)")
+                    continue
+                result = await svc.swap_usdc_to_token(
+                    s.defi_wallet_private_key_encrypted,
+                    token_address,
+                    trade_amount,
+                    slippage=s.defi_slippage / 100,
+                    fee=svc.get_token_fee(symbol),
+                    usdc_address=active_usdc,
+                )
+                tx = result.get("tx_hash", "")
+                results.append(f"✅ <b>DeFi BUY</b> <code>{symbol}</code> — spent ${trade_amount:.2f} USDC\nTx: <code>{tx}</code>")
+            except Exception as exc:
+                results.append(f"⚠️ <b>BUY Failed</b> <code>{symbol}</code>\n<code>{exc}</code>")
+        return "\n\n".join(results) if results else "No DeFi settings found."
 
     return f"❓ Unknown command: <code>{cmd}</code>. Use /help."
 
