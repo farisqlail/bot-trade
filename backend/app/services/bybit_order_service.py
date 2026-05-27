@@ -143,6 +143,42 @@ class BybitOrderService:
 
         return data.get("result") or {}
 
+    async def close_position(self, symbol: str, side: str, qty: str, category: str = "linear") -> dict:
+        """Market-close an open position (place opposite-side market order)."""
+        close_side = "Sell" if side.lower() in ("buy", "long") else "Buy"
+        return await self.place_order(symbol=symbol, side=close_side, qty=qty, order_type="Market", category=category)
+
+    async def set_trading_stop(
+        self,
+        symbol: str,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        trailing_stop: float | None = None,
+        position_idx: int = 0,
+        category: str = "linear",
+    ) -> dict:
+        """Amend SL/TP/trailing-stop on an existing open position."""
+        body: dict = {"category": category, "symbol": symbol, "positionIdx": position_idx}
+        if stop_loss is not None:
+            body["stopLoss"] = str(round(stop_loss, 6))
+        if take_profit is not None:
+            body["takeProfit"] = str(round(take_profit, 6))
+        if trailing_stop is not None:
+            body["trailingStop"] = str(round(trailing_stop, 6))
+        body_str = json.dumps(body, separators=(",", ":"))
+        headers = self._sign_post(body_str)
+        async with httpx.AsyncClient(timeout=15.0, verify=_SSL_VERIFY) as client:
+            resp = await client.post(
+                f"{self.base_url}/v5/position/trading-stop",
+                content=body_str,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        if data.get("retCode") != 0:
+            logger.warning("bybit_set_trading_stop_error", symbol=symbol, ret=data.get("retCode"), msg=data.get("retMsg"))
+        return data.get("result") or {}
+
     async def get_positions(self, symbol: str | None = None, category: str = "linear") -> list[dict]:
         params: dict = {"category": category, "settleCoin": "USDT"}
         if symbol:

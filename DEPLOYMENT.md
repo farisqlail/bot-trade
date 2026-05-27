@@ -30,16 +30,31 @@ systemctl enable docker && systemctl start docker
 cd /opt/tradingbot
 cp .env.example .env
 nano .env
-
-# Required fields to edit:
-# SECRET_KEY=<generate: openssl rand -base64 48>
-# JWT_SECRET_KEY=<generate: openssl rand -base64 48>
-# BINANCE_API_KEY=your_key
-# BINANCE_API_SECRET=your_secret
-# BINANCE_TESTNET=true   ← start with testnet!
 ```
 
-## Step 4 — Setup Ollama + DeepSeek
+Required fields:
+```env
+# WAJIB
+SECRET_KEY=<generate: openssl rand -base64 48>
+JWT_SECRET_KEY=<generate: openssl rand -base64 48>
+DB_PASSWORD=<strong password>
+
+# AI
+DEEPSEEK_API_KEY=sk-xxxx
+
+# Telegram (highly recommended)
+TELEGRAM_BOT_TOKEN=1234567890:AAExxx...
+TELEGRAM_CHAT_ID=123456789
+
+# Bybit real trading (optional — for CEX perpetual long/short)
+BYBIT_API_KEY=
+BYBIT_API_SECRET=
+
+# CORS
+CORS_ORIGINS=["https://yourdomain.com"]
+```
+
+## Step 4 — Setup Ollama (optional — only if not using DeepSeek API)
 
 ```bash
 chmod +x scripts/setup_ollama.sh
@@ -125,6 +140,22 @@ docker compose ps
 | PATCH | /api/v1/bot/settings | Update settings |
 | POST | /api/v1/bot/start | Start bot |
 | POST | /api/v1/bot/stop | Stop bot |
+| GET | /api/v1/defi/balance | DeFi wallet balance per network |
+| POST | /api/v1/defi/swap | Manual DeFi swap |
+
+---
+
+## Celery Background Tasks
+
+| Task | Schedule | Description |
+|------|----------|-------------|
+| `scan_market_opportunities` | 5 min | Scan coins, AI analysis, execute DeFi/Bybit trades |
+| `check_stop_loss_take_profit` | 30s | Auto-close paper trades on SL/TP hit |
+| `check_risk_limits` | 60s | Monitor and log risk events |
+| `run_auto_tuning` | Daily 02:00 UTC | Analyze performance, adjust risk_percent |
+| `process_telegram_callbacks` | 30s | Poll getUpdates: commands + inline button handlers |
+| `monitor_defi_positions` | 60s | Check held DeFi tokens across all networks, auto-exit on SELL signal |
+| `monitor_bybit_positions` | 60s | Sync Bybit positions to DB, signal-exit, move SL to breakeven |
 
 ---
 
@@ -134,6 +165,7 @@ docker compose ps
 # View logs
 docker compose logs -f backend
 docker compose logs -f celery_worker
+docker compose logs -f celery_beat
 
 # Celery worker status
 docker compose exec celery_worker celery -A app.workers.celery_app inspect active
@@ -141,8 +173,8 @@ docker compose exec celery_worker celery -A app.workers.celery_app inspect activ
 # DB connection
 docker compose exec postgres psql -U tradingbot -d tradingbot_db
 
-# Prometheus metrics
-curl http://localhost:8000/metrics
+# Check active Celery tasks
+docker compose exec celery_worker celery -A app.workers.celery_app inspect registered
 ```
 
 ## Update deployment
@@ -150,7 +182,7 @@ curl http://localhost:8000/metrics
 ```bash
 cd /opt/tradingbot
 git pull
-docker compose build backend
+docker compose build backend celery_worker celery_beat
 docker compose run --rm backend alembic upgrade head
 docker compose up -d backend celery_worker celery_beat
 ```
@@ -159,12 +191,13 @@ docker compose up -d backend celery_worker celery_beat
 
 ## Security Checklist
 
-- [ ] Change SECRET_KEY and JWT_SECRET_KEY in .env
-- [ ] Use BINANCE_TESTNET=true initially
-- [ ] Binance API key: futures trade permission only — NO withdrawal
+- [ ] Change SECRET_KEY and JWT_SECRET_KEY in .env (never reuse defaults)
+- [ ] Bybit API key: Derivatives trade permission ONLY — NO withdrawal permission
+- [ ] DeFi wallet: use dedicated bot wallet, not main/savings wallet
+- [ ] Set CORS_ORIGINS to your frontend URL only
 - [ ] Set ALLOWED_HOSTS to your domain
-- [ ] Set CORS_ORIGINS to your frontend URL
-- [ ] DEBUG=false in production
-- [ ] Firewall: only 80/443 open externally (SSH via private network)
+- [ ] Firewall: only 80/443 open externally (SSH via private network or VPN)
 - [ ] Regular DB backups via pg_dump
-- [ ] Monitor risk events daily
+- [ ] Monitor Telegram notifications daily for unexpected trade activity
+- [ ] Set `defi_trade_percent` conservatively (start at 20–30% per trade)
+- [ ] Set Bybit `leverage` conservatively (3–5x for small capital)

@@ -82,7 +82,7 @@ class ScannerService:
             "market_data": market_data,
         }
 
-    async def _execute_defi_trade(self, user_id: int, settings: Settings, opportunity: dict) -> dict | None:
+    async def _execute_defi_trade(self, user_id: int, settings: Settings, opportunity: dict, network: str | None = None) -> dict | None:
         from app.services.defi_service import DeFiService
 
         symbol = opportunity["symbol"]
@@ -92,7 +92,8 @@ class ScannerService:
         if not is_buy and not is_sell:
             return None
 
-        service = DeFiService(network=settings.defi_network or "arbitrum")
+        effective_network = network or settings.defi_network or "arbitrum"
+        service = DeFiService(network=effective_network)
         token_address = await service.get_token_address(symbol)
         if not token_address:
             return None
@@ -115,19 +116,20 @@ class ScannerService:
 
         if is_buy and in_position:
             logger.info("defi_skip_already_in_position", symbol=symbol)
-            await _TG().send_message(
-                f"ℹ️ <b>DeFi Skip BUY</b> <code>{symbol}</code>\nAlready holding token — in position, skip buy."
+            current_price = opportunity.get("price_at_analysis", 0)
+            tp_price = opportunity.get("suggested_tp", 0)
+            await _TG().send_message_with_keyboard(
+                f"ℹ️ <b>DeFi Skip BUY</b> <code>{symbol}</code>\n"
+                f"Already holding token — in position, skip buy.\n"
+                f"Current: <code>${current_price:,.6g}</code>  🎯 TP ref: <code>${tp_price:,.6g}</code>",
+                inline_keyboard=[[
+                    {"text": "💰 Take Profit (Sell Now)", "callback_data": f"defi_tp_{symbol}"}
+                ]]
             )
             return None
 
         if is_sell and not in_position:
             logger.info("defi_skip_no_position_to_sell", symbol=symbol)
-            token_label = symbol.replace("USDT", "").replace("BUSD", "").replace("USDC", "")
-            await _TG().send_message(
-                f"ℹ️ <b>DeFi Skip SELL</b> <code>{symbol}</code>\n"
-                f"No <code>{token_label}</code> held in wallet — bot needs BUY signal first to acquire token.\n"
-                f"<i>Current wallet has only USDC, no {token_label} to sell.</i>"
-            )
             return None
 
         try:
@@ -474,39 +476,62 @@ class ScannerService:
             and opportunities
         ):
             from app.services.defi_service import DeFiService
-            _defi_svc = DeFiService(network=settings.defi_network or "arbitrum")
-            # Prioritize BUY signals first — user likely has USDC, not tokens
             buy_opps = [c for c in opportunities if c.get("recommended_action") in {"BUY", "STRONG_BUY"}]
             sell_opps = [c for c in opportunities if c.get("recommended_action") in {"SELL", "STRONG_SELL"}]
-            traded_opp = None
-            for candidate in buy_opps + sell_opps:
-                token_addr = await _defi_svc.get_token_address(candidate["symbol"])
-                if not token_addr:
-                    logger.info("defi_skip_no_address", symbol=candidate["symbol"])
-                    continue
-                traded_opp = candidate
-                break
 
-            if traded_opp:
+            async def _try_defi(candidate: dict, network: str) -> None:
+                _svc = DeFiService(network=network)
+                token_addr = await _svc.get_token_address(candidate["symbol"])
+                if not token_addr:
+                    logger.info("defi_skip_no_address", symbol=candidate["symbol"], network=network)
+                    return
                 try:
                     defi_result = await asyncio.wait_for(
-                        self._execute_defi_trade(user_id, settings, traded_opp),
+                        self._execute_defi_trade(user_id, settings, candidate, network=network),
                         timeout=180,
                     )
                     if defi_result:
-                        traded_opp["defi_tx"] = defi_result.get("tx_hash")
-                        traded_opp["defi_status"] = defi_result.get("status")
+                        candidate["defi_tx"] = defi_result.get("tx_hash")
+                        candidate["defi_status"] = defi_result.get("status")
                 except asyncio.TimeoutError:
-                    logger.warning("defi_trade_timeout", user_id=user_id, symbol=traded_opp["symbol"])
+                    logger.warning("defi_trade_timeout", user_id=user_id, symbol=candidate["symbol"], network=network)
                     from app.services.telegram_service import TelegramService
                     await TelegramService().send_message(
-                        f"⚠️ <b>DeFi Trade Timeout</b>\n<code>{traded_opp['symbol']}</code> — transaction took >180s, skipped."
+                        f"⚠️ <b>DeFi Trade Timeout</b>\n<code>{candidate['symbol']}</code> [{network}] — transaction took >180s, skipped."
                     )
                 except Exception as exc:
-                    logger.warning("scanner_defi_trade_failed", symbol=traded_opp["symbol"], error=str(exc))
+                    logger.warning("scanner_defi_trade_failed", symbol=candidate["symbol"], network=network, error=str(exc))
                     from app.services.telegram_service import TelegramService
                     await TelegramService().send_message(
-                        f"⚠️ <b>DeFi Trade Error</b>\n<code>{traded_opp['symbol']}</code>\n<code>{exc}</code>"
+                        f"⚠️ <b>DeFi Trade Error</b>\n<code>{candidate['symbol']}</code> [{network}]\n<code>{exc}</code>"
+                    )
+
+            for network in settings.defi_networks:
+                # Execute all SELL signals on this network (closes held positions)
+                for candidate in sell_opps:
+                    await _try_defi(candidate, network)
+
+                # Execute at most one BUY per network (needs USDC on that network)
+                _net_svc = DeFiService(network=network)
+                buy_executed = False
+                skipped_buy_symbols = []
+                for candidate in buy_opps:
+                    token_addr = await _net_svc.get_token_address(candidate["symbol"])
+                    if token_addr:
+                        await _try_defi(candidate, network)
+                        buy_executed = True
+                        break
+                    else:
+                        skipped_buy_symbols.append(candidate["symbol"])
+
+                if not buy_executed and skipped_buy_symbols:
+                    from app.services.telegram_service import TelegramService as _TG2
+                    sym_list = ", ".join(f"<code>{s}</code>" for s in skipped_buy_symbols[:5])
+                    await _TG2().send_message(
+                        f"⚠️ <b>DeFi BUY Skipped</b> [{network}]\n"
+                        f"Signal BUY untuk: {sym_list}\n"
+                        f"Token tidak tersedia di DeFi {network}.\n"
+                        f"Gunakan Bybit untuk trade token ini."
                     )
 
         for opportunity in opportunities:
@@ -585,26 +610,28 @@ class ScannerService:
             and opportunities
         ):
             from app.services.defi_service import DeFiService
-            _defi_svc = DeFiService(network=settings.defi_network or "arbitrum")
-            for candidate in opportunities:
-                if candidate.get("recommended_action") not in {"BUY", "STRONG_BUY", "SELL", "STRONG_SELL"}:
-                    continue
-                token_addr = await _defi_svc.get_token_address(candidate["symbol"])
-                if not token_addr:
-                    continue
-                try:
-                    defi_result = await asyncio.wait_for(
-                        self._execute_defi_trade(user_id, settings, candidate),
-                        timeout=180,
-                    )
-                    if defi_result:
-                        candidate["defi_tx"] = defi_result.get("tx_hash")
-                        candidate["defi_status"] = defi_result.get("status")
-                except asyncio.TimeoutError:
-                    logger.warning("defi_trade_timeout", user_id=user_id, symbol=candidate["symbol"])
-                except Exception as exc:
-                    logger.warning("scanner_defi_trade_failed", symbol=candidate["symbol"], error=str(exc))
-                break
+            buy_candidates = [c for c in opportunities if c.get("recommended_action") in {"BUY", "STRONG_BUY"}]
+            sell_candidates = [c for c in opportunities if c.get("recommended_action") in {"SELL", "STRONG_SELL"}]
+
+            for network in settings.defi_networks:
+                _net_svc = DeFiService(network=network)
+                # Execute all SELL signals first, then one BUY per network
+                for candidate in sell_candidates + buy_candidates[:1]:
+                    token_addr = await _net_svc.get_token_address(candidate["symbol"])
+                    if not token_addr:
+                        continue
+                    try:
+                        defi_result = await asyncio.wait_for(
+                            self._execute_defi_trade(user_id, settings, candidate, network=network),
+                            timeout=180,
+                        )
+                        if defi_result:
+                            candidate["defi_tx"] = defi_result.get("tx_hash")
+                            candidate["defi_status"] = defi_result.get("status")
+                    except asyncio.TimeoutError:
+                        logger.warning("defi_trade_timeout", user_id=user_id, symbol=candidate["symbol"], network=network)
+                    except Exception as exc:
+                        logger.warning("scanner_defi_trade_failed", symbol=candidate["symbol"], network=network, error=str(exc))
 
         if (
             settings

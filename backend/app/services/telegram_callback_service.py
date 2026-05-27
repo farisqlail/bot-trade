@@ -414,6 +414,120 @@ async def process_telegram_callbacks(db: AsyncSession) -> int:
                     else:
                         await tg.answer_callback_query(cb_id, "Already resolved or not found.")
 
+                elif data.startswith("bybit_tp_"):
+                    trade_id_str = data[len("bybit_tp_"):]
+                    await tg.answer_callback_query(cb_id, "💰 Closing Bybit position...")
+                    from app.models.trade import Trade, TradeStatus
+                    from sqlalchemy import select
+                    from datetime import datetime, timezone
+
+                    try:
+                        trade_id = int(trade_id_str)
+                    except ValueError:
+                        await tg.answer_callback_query(cb_id, "Invalid trade ID.")
+                        continue
+
+                    t_result = await db.execute(select(Trade).where(Trade.id == trade_id))
+                    trade = t_result.scalar_one_or_none()
+
+                    if not trade:
+                        reply_text = f"⚠️ Trade #{trade_id} not found."
+                    elif trade.status != TradeStatus.OPEN:
+                        reply_text = f"ℹ️ Trade #{trade_id} <code>{trade.symbol}</code> already closed."
+                    else:
+                        s_result = await db.execute(select(Settings).where(Settings.user_id == trade.user_id))
+                        s = s_result.scalar_one_or_none()
+                        if not s or not s.polymarket_api_key or not s.polymarket_api_secret:
+                            reply_text = f"⚠️ No Bybit API key for user {trade.user_id}."
+                        else:
+                            from app.services.bybit_order_service import BybitOrderService
+                            from app.services.exchange_service import ExchangeService
+                            order_svc = BybitOrderService(
+                                api_key=s.polymarket_api_key,
+                                api_secret=s.polymarket_api_secret,
+                                testnet=s.use_public_data_only,
+                            )
+                            try:
+                                positions = await order_svc.get_positions(symbol=trade.symbol)
+                                bybit_pos = next(
+                                    (p for p in positions if p.get("symbol") == trade.symbol and float(p.get("size", 0)) > 0),
+                                    None,
+                                )
+                                if not bybit_pos:
+                                    reply_text = f"ℹ️ <code>{trade.symbol}</code> — no open position on Bybit (may already be closed)."
+                                else:
+                                    qty = bybit_pos.get("size", "0")
+                                    side = bybit_pos.get("side", "Buy")
+                                    await order_svc.close_position(symbol=trade.symbol, side=side, qty=str(qty))
+                                    exchange_svc = ExchangeService()
+                                    ticker = await exchange_svc.get_ticker(trade.symbol)
+                                    exit_price = ticker["price"]
+                                    from app.models.trade import TradeDirection
+                                    is_long = trade.direction == TradeDirection.LONG
+                                    pnl_mult = 1 if is_long else -1
+                                    pnl_pct = pnl_mult * (exit_price - trade.entry_price) / trade.entry_price * 100 * trade.leverage
+                                    pnl_usd = trade.risk_amount * pnl_pct / 100 if trade.risk_amount else 0.0
+                                    trade.status = TradeStatus.CLOSED
+                                    trade.exit_price = exit_price
+                                    trade.pnl = round(pnl_usd, 4)
+                                    trade.pnl_percent = round(pnl_pct, 4)
+                                    trade.closed_at = datetime.now(timezone.utc)
+                                    await db.commit()
+                                    reply_text = (
+                                        f"✅ <b>Bybit TP Executed</b> <code>{trade.symbol}</code>\n"
+                                        f"Exit: <code>${exit_price:,.6g}</code>\n"
+                                        f"PnL: <code>{pnl_pct:+.2f}%</code> (<code>${pnl_usd:+.2f}</code>)"
+                                    )
+                                    logger.info("bybit_tp_callback_executed", trade_id=trade_id, symbol=trade.symbol, pnl=pnl_usd)
+                            except Exception as exc:
+                                logger.error("bybit_tp_callback_failed", trade_id=trade_id, error=str(exc))
+                                reply_text = f"⚠️ <b>Bybit TP Failed</b> <code>{trade.symbol}</code>\n<code>{exc}</code>"
+
+                    if message_id:
+                        await tg.edit_message_text(message_id, reply_text)
+                    await tg.send_message(reply_text)
+                    processed += 1
+
+                elif data.startswith("defi_tp_"):
+                    symbol = data[len("defi_tp_"):]
+                    await tg.answer_callback_query(cb_id, f"💰 Selling {symbol}...")
+                    all_settings = await _get_all_settings(db)
+                    sell_results = []
+                    for s in all_settings:
+                        if not s.defi_enabled or not s.defi_wallet_address or not s.defi_wallet_private_key_encrypted:
+                            continue
+                        from app.services.defi_service import DeFiService
+                        svc = DeFiService(network=s.defi_network or "arbitrum")
+                        token_address = await svc.get_token_address(symbol)
+                        if not token_address:
+                            sell_results.append(f"⚠️ <code>{symbol}</code> not found in token registry.")
+                            continue
+                        try:
+                            result = await svc.sell_all_to_usdc(
+                                s.defi_wallet_private_key_encrypted,
+                                token_address,
+                                slippage=s.defi_slippage / 100,
+                                fee=svc.get_token_fee(symbol),
+                            )
+                            status = result.get("status", "unknown")
+                            if status == "no_balance":
+                                sell_results.append(f"ℹ️ <code>{symbol}</code> — no balance to sell.")
+                            else:
+                                tx = result.get("tx_hash", "N/A")
+                                sell_results.append(
+                                    f"✅ <b>DeFi Take Profit</b> <code>{symbol}</code> → USDC\n"
+                                    f"Tx: <code>{tx}</code>"
+                                )
+                        except Exception as exc:
+                            logger.error("defi_tp_callback_sell_failed", symbol=symbol, error=str(exc))
+                            sell_results.append(f"⚠️ Sell failed: <code>{exc}</code>")
+                    reply_text = "\n\n".join(sell_results) if sell_results else f"⚠️ No DeFi settings for {symbol}."
+                    if message_id:
+                        await tg.edit_message_text(message_id, reply_text)
+                    await tg.send_message(reply_text)
+                    logger.info("defi_tp_callback_processed", symbol=symbol)
+                    processed += 1
+
             except Exception as exc:
                 logger.warning("telegram_callback_process_error", data=data, error=str(exc))
                 await tg.answer_callback_query(cb_id, "Error processing request.")

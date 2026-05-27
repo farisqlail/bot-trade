@@ -246,3 +246,267 @@ def check_stop_loss_take_profit(self):
         run_async(_run())
     except Exception as exc:
         logger.error("sl_tp_check_error", error=str(exc))
+
+
+@celery_app.task(name="app.workers.tasks.monitor_bybit_positions", bind=True)
+def monitor_bybit_positions(self):
+    async def _run():
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import select, and_
+        from app.models.settings import Settings
+        from app.models.trade import Trade, TradeStatus, TradeDirection
+        from app.services.bybit_order_service import BybitOrderService
+        from app.services.exchange_service import ExchangeService
+        from app.services.telegram_service import TelegramService
+        from datetime import datetime, timezone
+
+        async with AsyncSessionLocal() as db:
+            # Only real trades (have exchange_order_id)
+            result = await db.execute(
+                select(Trade).where(
+                    and_(
+                        Trade.status == TradeStatus.OPEN,
+                        Trade.exchange_order_id.isnot(None),
+                    )
+                )
+            )
+            real_trades = result.scalars().all()
+            if not real_trades:
+                return
+
+            exchange_svc = ExchangeService()
+            tg = TelegramService()
+
+            for trade in real_trades:
+                # Get API keys for this user
+                s_result = await db.execute(select(Settings).where(Settings.user_id == trade.user_id))
+                s = s_result.scalar_one_or_none()
+                if not s or not s.polymarket_api_key or not s.polymarket_api_secret:
+                    continue
+
+                order_svc = BybitOrderService(
+                    api_key=s.polymarket_api_key,
+                    api_secret=s.polymarket_api_secret,
+                    testnet=s.use_public_data_only,
+                )
+
+                # Sync: check if Bybit already closed this position
+                try:
+                    positions = await order_svc.get_positions(symbol=trade.symbol)
+                    bybit_pos = next(
+                        (p for p in positions if p.get("symbol") == trade.symbol and float(p.get("size", 0)) > 0),
+                        None,
+                    )
+                except Exception as exc:
+                    logger.warning("bybit_monitor_get_positions_failed", symbol=trade.symbol, error=str(exc))
+                    continue
+
+                if bybit_pos is None:
+                    # Bybit position closed (SL/TP hit at exchange) — sync DB
+                    try:
+                        ticker = await exchange_svc.get_ticker(trade.symbol)
+                        exit_price = ticker["price"]
+                    except Exception:
+                        exit_price = trade.entry_price
+
+                    pnl_mult = 1 if trade.direction == TradeDirection.LONG else -1
+                    pnl_pct = pnl_mult * (exit_price - trade.entry_price) / trade.entry_price * 100 * trade.leverage
+                    pnl_usd = trade.risk_amount * pnl_pct / 100 if trade.risk_amount else 0.0
+
+                    trade.status = TradeStatus.CLOSED
+                    trade.exit_price = exit_price
+                    trade.pnl = round(pnl_usd, 4)
+                    trade.pnl_percent = round(pnl_pct, 4)
+                    trade.closed_at = datetime.now(timezone.utc)
+                    logger.info("bybit_monitor_synced_close", trade_id=trade.id, symbol=trade.symbol, pnl=pnl_usd)
+                    await tg.notify_trade_closed(
+                        symbol=trade.symbol,
+                        pnl=pnl_usd,
+                        pnl_percent=pnl_pct,
+                        exit_price=exit_price,
+                        reason="Bybit SL/TP (synced)",
+                    )
+                    continue
+
+                # Position still open — check signal for early exit
+                try:
+                    market_data = await exchange_svc.get_market_data(trade.symbol)
+                except Exception:
+                    continue
+
+                candles = market_data.get("candles") or []
+                current_price = float(market_data.get("price") or 0.0)
+                if len(candles) >= 2 and candles[0].get("close"):
+                    momentum = (candles[-1]["close"] - candles[0]["close"]) / candles[0]["close"]
+                else:
+                    momentum = 0.0
+                change_score = float(market_data.get("change_24h") or 0.0) / 100.0
+                sentiment_score = float(market_data.get("polymarket_bias_score") or 0.0)
+                score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
+
+                is_long = trade.direction == TradeDirection.LONG
+                # Signal flip: LONG + bearish signal, or SHORT + bullish signal
+                signal_flip = (is_long and score <= -0.005) or (not is_long and score >= 0.005)
+                if not signal_flip:
+                    # Optionally move SL to breakeven if in profit > 1%
+                    if current_price and trade.entry_price:
+                        profit_pct = (current_price - trade.entry_price) / trade.entry_price * (1 if is_long else -1) * 100
+                        if profit_pct >= 1.5 and trade.stop_loss:
+                            be_sl = trade.entry_price * (1.001 if is_long else 0.999)
+                            current_sl = float(bybit_pos.get("stopLoss") or 0)
+                            sl_already_moved = (is_long and current_sl >= be_sl) or (not is_long and 0 < current_sl <= be_sl)
+                            if not sl_already_moved:
+                                try:
+                                    await order_svc.set_trading_stop(symbol=trade.symbol, stop_loss=be_sl)
+                                    trade.stop_loss = be_sl
+                                    logger.info("bybit_monitor_sl_moved_to_be", symbol=trade.symbol, sl=be_sl)
+                                    await tg.send_message_with_keyboard(
+                                        f"🔒 <b>SL moved to breakeven</b> <code>{trade.symbol}</code>\n"
+                                        f"Profit: <code>+{profit_pct:.2f}%</code> → SL: <code>${be_sl:,.6g}</code>\n"
+                                        f"Current: <code>${current_price:,.6g}</code>",
+                                        inline_keyboard=[[
+                                            {"text": "💰 Take Profit Now", "callback_data": f"bybit_tp_{trade.id}"},
+                                        ]]
+                                    )
+                                except Exception as exc:
+                                    logger.warning("bybit_monitor_sl_amend_failed", symbol=trade.symbol, error=str(exc))
+                    continue
+
+                # Signal flip detected — close position
+                qty = bybit_pos.get("size", "0")
+                side = bybit_pos.get("side", "Buy")
+                action_label = "STRONG_SELL signal on LONG" if is_long else "STRONG_BUY signal on SHORT"
+                logger.info("bybit_monitor_signal_exit", symbol=trade.symbol, action=action_label, score=round(score, 4))
+                try:
+                    await order_svc.close_position(symbol=trade.symbol, side=side, qty=str(qty))
+                    pnl_mult = 1 if is_long else -1
+                    pnl_pct = pnl_mult * (current_price - trade.entry_price) / trade.entry_price * 100 * trade.leverage
+                    pnl_usd = trade.risk_amount * pnl_pct / 100 if trade.risk_amount else 0.0
+                    trade.status = TradeStatus.CLOSED
+                    trade.exit_price = current_price
+                    trade.pnl = round(pnl_usd, 4)
+                    trade.pnl_percent = round(pnl_pct, 4)
+                    trade.closed_at = datetime.now(timezone.utc)
+                    await tg.send_message(
+                        f"🚨 <b>Bybit Signal Exit</b> <code>{trade.symbol}</code>\n"
+                        f"Reason: {action_label} (score {score:+.4f})\n"
+                        f"Exit: <code>${current_price:,.6g}</code>\n"
+                        f"PnL: <code>{pnl_pct:+.2f}%</code> (<code>${pnl_usd:+.2f}</code>)"
+                    )
+                except Exception as exc:
+                    logger.error("bybit_monitor_close_failed", symbol=trade.symbol, error=str(exc))
+                    await tg.send_message(
+                        f"⚠️ <b>Bybit Signal Exit Failed</b> <code>{trade.symbol}</code>\n<code>{exc}</code>"
+                    )
+
+            await db.commit()
+
+    try:
+        run_async(_run())
+    except Exception as exc:
+        logger.error("monitor_bybit_positions_error", error=str(exc))
+
+
+@celery_app.task(name="app.workers.tasks.monitor_defi_positions", bind=True)
+def monitor_defi_positions(self):
+    async def _run():
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import select
+        from app.models.settings import Settings
+        from app.services.defi_service import DeFiService, ARBITRUM_KNOWN_TOKENS
+        from app.services.exchange_service import ExchangeService
+        from app.services.telegram_service import TelegramService
+
+        # Symbols to monitor across all networks (price data from Bybit, token address from DexScreener)
+        MONITOR_SYMBOLS = list(ARBITRUM_KNOWN_TOKENS.keys())
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Settings).where(
+                    Settings.bot_enabled == True,
+                    Settings.defi_enabled == True,
+                    Settings.auto_trade == True,
+                )
+            )
+            active_settings = result.scalars().all()
+            exchange_svc = ExchangeService()
+
+            for s in active_settings:
+                if not s.defi_wallet_address or not s.defi_wallet_private_key_encrypted:
+                    continue
+
+                for network in s.defi_networks:
+                    svc = DeFiService(network=network)
+
+                    for symbol in MONITOR_SYMBOLS:
+                        token_address = await svc.get_token_address(symbol)
+                        if not token_address:
+                            continue
+
+                        try:
+                            token_raw, _ = await svc.get_token_balance(s.defi_wallet_address, token_address)
+                        except Exception:
+                            continue
+
+                        if token_raw == 0:
+                            continue
+
+                        # Token held on this network — get current signal
+                        try:
+                            market_data = await exchange_svc.get_market_data(symbol)
+                        except Exception as exc:
+                            logger.warning("defi_monitor_market_data_failed", symbol=symbol, network=network, error=str(exc))
+                            continue
+
+                        candles = market_data.get("candles") or []
+                        current_price = float(market_data.get("price") or 0.0)
+                        if len(candles) >= 2 and candles[0].get("close"):
+                            momentum = (candles[-1]["close"] - candles[0]["close"]) / candles[0]["close"]
+                        else:
+                            momentum = 0.0
+                        change_score = float(market_data.get("change_24h") or 0.0) / 100.0
+                        sentiment_score = float(market_data.get("polymarket_bias_score") or 0.0)
+                        score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
+
+                        if score > -0.001:
+                            logger.info("defi_monitor_holding_ok", symbol=symbol, network=network, score=round(score, 4), price=current_price)
+                            continue
+
+                        action = "STRONG_SELL" if score <= -0.005 else "SELL"
+                        logger.info("defi_monitor_sell_triggered", symbol=symbol, network=network, action=action, score=round(score, 4), user_id=s.user_id)
+
+                        try:
+                            sell_result = await asyncio.wait_for(
+                                svc.sell_all_to_usdc(
+                                    s.defi_wallet_private_key_encrypted,
+                                    token_address,
+                                    slippage=s.defi_slippage / 100,
+                                    fee=svc.get_token_fee(symbol),
+                                ),
+                                timeout=180,
+                            )
+                            status = sell_result.get("status")
+                            if status == "no_balance":
+                                continue
+                            tx = sell_result.get("tx_hash", "N/A")
+                            await TelegramService().send_message(
+                                f"🔴 <b>DeFi Auto-Exit</b> <code>{symbol}</code> [{network}]\n"
+                                f"Signal: <b>{action}</b> (score {score:+.4f})\n"
+                                f"Price: <code>${current_price:,.6g}</code>\n"
+                                f"Tx: <code>{tx}</code>"
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning("defi_monitor_sell_timeout", symbol=symbol, network=network)
+                            await TelegramService().send_message(
+                                f"⚠️ <b>DeFi Auto-Exit Timeout</b> <code>{symbol}</code> [{network}]\nTransaction took >180s."
+                            )
+                        except Exception as exc:
+                            logger.error("defi_monitor_sell_failed", symbol=symbol, network=network, error=str(exc))
+                            await TelegramService().send_message(
+                                f"⚠️ <b>DeFi Auto-Exit Failed</b> <code>{symbol}</code> [{network}]\n<code>{exc}</code>"
+                            )
+
+    try:
+        run_async(_run())
+    except Exception as exc:
+        logger.error("monitor_defi_positions_error", error=str(exc))

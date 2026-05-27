@@ -139,6 +139,22 @@ class Settings(Base):
         self.notification_settings = payload
 
     @property
+    def defi_networks(self) -> list[str]:
+        """All networks to trade on. Defaults to [defi_network] for backwards compat."""
+        allowed = {"arbitrum", "optimism", "base", "polygon"}
+        saved = (self.notification_settings or {}).get("defi_networks")
+        if saved and isinstance(saved, list):
+            return [n for n in saved if n in allowed] or [self.defi_network]
+        return [self.defi_network]
+
+    @defi_networks.setter
+    def defi_networks(self, value: list[str]):
+        allowed = {"arbitrum", "optimism", "base", "polygon"}
+        payload = dict(self.notification_settings or {})
+        payload["defi_networks"] = [n for n in value if n in allowed]
+        self.notification_settings = payload
+
+    @property
     def defi_wallet_address(self):
         return (self.notification_settings or {}).get("defi_wallet_address")
 

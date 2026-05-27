@@ -39,5 +39,13 @@ celery_app.conf.update(
             "task": "app.workers.tasks.process_telegram_callbacks",
             "schedule": 30.0,  # poll every 30s for approve/reject button clicks
         },
+        "monitor-defi-positions": {
+            "task": "app.workers.tasks.monitor_defi_positions",
+            "schedule": 60.0,  # check held DeFi tokens every 60s, auto-exit on SELL signal
+        },
+        "monitor-bybit-positions": {
+            "task": "app.workers.tasks.monitor_bybit_positions",
+            "schedule": 60.0,  # sync Bybit positions, signal-exit, move SL to breakeven
+        },
     },
 )

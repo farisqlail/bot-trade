@@ -35,6 +35,7 @@ class TelegramService:
             return
         if not opportunities:
             logger.info("telegram_scan_notify_skipped_no_opportunities")
+            await self.send_message("🔇 <b>Scan complete</b> — no market data returned. Check watchlist or bot settings.")
             return
 
         signals = [o for o in opportunities if o.get("recommended_action") in ("BUY", "SELL")]
