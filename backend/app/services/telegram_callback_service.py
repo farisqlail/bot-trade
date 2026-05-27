@@ -505,6 +505,7 @@ async def process_telegram_callbacks(db: AsyncSession) -> int:
 
     try:
         updates = await _fetch_updates(settings.TELEGRAM_BOT_TOKEN, offset)
+        logger.info("telegram_poll", offset=offset, updates_count=len(updates))
     except Exception as exc:
         logger.warning("telegram_getUpdates_failed", error=str(exc))
         return 0
@@ -696,7 +697,7 @@ async def process_telegram_callbacks(db: AsyncSession) -> int:
             logger.warning("telegram_command_unauthorized_chat", chat_id=chat_id)
             continue
 
-        logger.info("telegram_command_received", command=text.split()[0])
+        logger.info("telegram_command_received", command=text.split()[0], chat_id=chat_id, expected=str(settings.TELEGRAM_CHAT_ID))
         try:
             reply = await _handle_command(text, db)
             await tg.send_message(reply)
