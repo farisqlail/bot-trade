@@ -55,6 +55,8 @@ def scan_market_opportunities(self):
             scanner = ScannerService(db)
 
             for s in active_settings:
+                if not s.continuous_scan_enabled:
+                    continue
                 if s.auto_trade or s.paper_trade_enabled:
                     if s.gmx_enabled and s.defi_wallet_address:
                         mode = "gmx"
