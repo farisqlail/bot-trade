@@ -83,6 +83,29 @@ class BybitOrderService:
                     return 0.0
         return 0.0
 
+    async def get_deposit_address(self, coin: str = "USDC", chain: str = "ARB") -> dict:
+        params = {"coin": coin, "chainType": chain}
+        qs = f"coin={coin}&chainType={chain}"
+        headers = self._sign_get(qs)
+        async with httpx.AsyncClient(timeout=15.0, verify=_SSL_VERIFY) as client:
+            resp = await client.get(
+                f"{self.base_url}/v5/asset/deposit/query-address",
+                params=params,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        result = data.get("result") or {}
+        chains = result.get("chains") or []
+        addr_info = chains[0] if chains else {}
+        return {
+            "address": addr_info.get("addressDeposit") or result.get("address"),
+            "tag": addr_info.get("tagDeposit") or result.get("tag"),
+            "chain": chain,
+            "coin": coin,
+            "network_name": "Arbitrum One",
+        }
+
     async def set_leverage(self, symbol: str, leverage: int, category: str = "linear") -> None:
         body = {
             "category": category,

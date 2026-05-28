@@ -42,6 +42,14 @@ class SettingsUpdate(BaseModel):
     gmx_collateral_percent: Optional[float] = None
     gmx_sl_percent: Optional[float] = None
     paper_trade_enabled: Optional[bool] = None
+    gtrade_enabled: Optional[bool] = None
+    gtrade_leverage: Optional[float] = None
+    gtrade_collateral_percent: Optional[float] = None
+    gtrade_sl_percent: Optional[float] = None
+    bybit_leverage: Optional[int] = None
+    bybit_collateral_percent: Optional[float] = None
+    bybit_sl_percent: Optional[float] = None
+    continuous_scan_enabled: Optional[bool] = None
 
 
 class SettingsResponse(BaseModel):
@@ -84,5 +92,13 @@ class SettingsResponse(BaseModel):
     gmx_leverage: float = 2.0
     gmx_collateral_percent: float = 10.0
     gmx_sl_percent: float = 3.0
+    gtrade_enabled: bool = False
+    gtrade_leverage: float = 2.0
+    gtrade_collateral_percent: float = 10.0
+    gtrade_sl_percent: float = 3.0
+    bybit_leverage: int = 5
+    bybit_collateral_percent: float = 10.0
+    bybit_sl_percent: float = 3.0
+    continuous_scan_enabled: bool = True
 
     model_config = {"from_attributes": True}

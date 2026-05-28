@@ -227,3 +227,77 @@ async def scan_opportunities(
         user_id=user_id,
         db=db,
     )
+
+
+_LARGE_CAPS = {
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LTCUSDT", "ATOMUSDT", "MATICUSDT",
+    "TRXUSDT", "LINKUSDT", "UNIUSDT", "NEARUSDT", "APTUSDT", "SUIUSDT",
+}
+
+
+@router.get("/altcoins")
+async def scan_altcoins(
+    limit: int = Query(30, ge=5, le=100),
+    min_volume_usd: float = Query(500_000, ge=0),
+    action_filter: Optional[str] = Query(None, description="BUY, SELL, or HOLD"),
+    user_id: int = Depends(get_current_user_id),
+):
+    exchange = ExchangeService()
+    try:
+        all_tickers = await exchange.get_all_tickers(min_turnover_usd=min_volume_usd)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Bybit fetch failed: {str(e)}")
+
+    altcoins = [t for t in all_tickers if t["symbol"] not in _LARGE_CAPS]
+
+    results = []
+    for t in altcoins:
+        change = float(t.get("change_24h") or 0.0)
+        score = change / 100.0
+
+        if score >= 0.002:
+            action = "STRONG_BUY" if score >= 0.01 else "BUY"
+            sentiment = "BULLISH"
+        elif score <= -0.002:
+            action = "STRONG_SELL" if score <= -0.01 else "SELL"
+            sentiment = "BEARISH"
+        else:
+            action = "HOLD"
+            sentiment = "SIDEWAYS"
+
+        results.append({
+            "symbol": t["symbol"],
+            "price": t["price"],
+            "change_24h": round(change, 2),
+            "volume_24h": t.get("volume_24h", 0),
+            "turnover_24h": t.get("turnover_24h", 0),
+            "high_24h": t.get("high_24h", 0),
+            "low_24h": t.get("low_24h", 0),
+            "score": round(score, 4),
+            "recommended_action": action,
+            "sentiment": sentiment,
+        })
+
+    if action_filter:
+        af = action_filter.upper()
+        if af == "BUY":
+            results = [r for r in results if r["recommended_action"] in {"BUY", "STRONG_BUY"}]
+        elif af == "SELL":
+            results = [r for r in results if r["recommended_action"] in {"SELL", "STRONG_SELL"}]
+        elif af in {"HOLD", "BUY", "SELL"}:
+            results = [r for r in results if r["recommended_action"] == af]
+
+    results.sort(key=lambda x: abs(x["score"]), reverse=True)
+    results = results[:limit]
+
+    buy_count = sum(1 for r in results if r["recommended_action"] in {"BUY", "STRONG_BUY"})
+    sell_count = sum(1 for r in results if r["recommended_action"] in {"SELL", "STRONG_SELL"})
+
+    return {
+        "altcoins": results,
+        "total": len(results),
+        "scanned": len(altcoins),
+        "buy_signals": buy_count,
+        "sell_signals": sell_count,
+    }

@@ -33,7 +33,9 @@ export default function BotSettings() {
           min_volume_filter: res.data.min_volume_filter ?? 5000000,
           polymarket_api_key: res.data.polymarket_api_key || '',
           polymarket_api_secret: '',
-          polymarket_api_passphrase: '',
+          bybit_leverage: res.data.bybit_leverage ?? 5,
+          bybit_collateral_percent: res.data.bybit_collateral_percent ?? 10,
+          bybit_sl_percent: res.data.bybit_sl_percent ?? 3,
           defi_enabled: res.data.defi_enabled ?? false,
           defi_network: res.data.defi_network || 'arbitrum',
           defi_wallet_address: res.data.defi_wallet_address || '',
@@ -45,6 +47,11 @@ export default function BotSettings() {
           gmx_leverage: res.data.gmx_leverage ?? 2,
           gmx_collateral_percent: res.data.gmx_collateral_percent ?? 10,
           gmx_sl_percent: res.data.gmx_sl_percent ?? 3,
+          gtrade_enabled: res.data.gtrade_enabled ?? false,
+          gtrade_leverage: res.data.gtrade_leverage ?? 2,
+          gtrade_collateral_percent: res.data.gtrade_collateral_percent ?? 10,
+          gtrade_sl_percent: res.data.gtrade_sl_percent ?? 3,
+          continuous_scan_enabled: res.data.continuous_scan_enabled ?? true,
         })
       })
       .catch(console.error)
@@ -63,7 +70,6 @@ export default function BotSettings() {
           .join(',')
       }
       if (!payload.polymarket_api_secret) delete payload.polymarket_api_secret
-      if (!payload.polymarket_api_passphrase) delete payload.polymarket_api_passphrase
       if (!payload.defi_private_key) delete payload.defi_private_key
       await botApi.updateSettings(payload)
       alert('Settings saved')
@@ -240,6 +246,7 @@ export default function BotSettings() {
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
           <h3 className="font-semibold mb-2">Bot Options</h3>
+          <Toggle label="Auto Scan — Bot scan terus dan kirim notifikasi Telegram otomatis" name="continuous_scan_enabled" />
           <Toggle label="Auto Trade Real — Execute nyata (DeFi/GMX/Bybit) saat ada signal" name="auto_trade" />
           <Toggle label="Paper Trading (Simulasi) — Catat trade simulasi tanpa uang nyata" name="paper_trade_enabled" />
           <Toggle label="AI Analysis Enabled" name="ai_analysis_enabled" />
@@ -253,15 +260,36 @@ export default function BotSettings() {
         </div>
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-          <h3 className="font-semibold mb-4">Polymarket API</h3>
-          <div className="space-y-3">
-            <Field label="API Key" name="polymarket_api_key" />
-            <Field label="API Secret (leave blank to keep existing)" name="polymarket_api_secret" type="password" />
-            <Field label="API Passphrase (leave blank to keep existing)" name="polymarket_api_passphrase" type="password" />
+          <h3 className="font-semibold mb-4">Bybit Futures API</h3>
+
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 mb-4 text-xs text-blue-300">
+            ⚡ <strong>Bybit CEX Futures.</strong> API Key & Secret dari <strong>Bybit.com → API Management → Create API</strong>. Pilih permission: Read + Trade. CEX: dana USDT ada di akun Bybit, bukan MetaMask/Arbitrum.
           </div>
-          <p className="text-xs text-yellow-400 mt-3">
-            Public Gamma and CLOB read endpoints need no auth. Trading endpoints need Polymarket CLOB credentials.
-          </p>
+
+          <div className="space-y-3">
+            <Field label="Bybit API Key" name="polymarket_api_key" />
+            <Field label="Bybit API Secret (leave blank to keep existing)" name="polymarket_api_secret" type="password" />
+          </div>
+        </div>
+
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+          <h3 className="font-semibold mb-3">Bybit Futures Settings</h3>
+
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-xs text-yellow-300">
+            ⚠️ <strong>Default settings untuk Bybit Futures.</strong> Digunakan saat trade altcoin via Bybit dari Altcoin Scanner. USDT balance di Bybit = modal trading CEX.
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-4">
+            <Field label="Leverage (x)" name="bybit_leverage" type="number" step="1" placeholder="5" />
+            <Field label="Collateral per Trade (% USDT)" name="bybit_collateral_percent" type="number" step="5" placeholder="10" />
+            <Field label="Stop-Loss %" name="bybit_sl_percent" type="number" step="0.5" placeholder="3" />
+          </div>
+
+          <div className="mt-3 text-xs text-gray-500 space-y-1">
+            <div>• Collateral 10% + Leverage 5x = Position size 50% USDT balance per signal</div>
+            <div>• Stop-loss otomatis close jika harga bergerak melebihi SL%</div>
+            <div>• Minimal USDT di Bybit: $1.00 per trade</div>
+          </div>
         </div>
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
@@ -376,6 +404,32 @@ export default function BotSettings() {
             <div>• Collateral 10% + Leverage 2x = Position size 20% USDC per signal</div>
             <div>• Stop-loss otomatis close position jika harga turun (LONG) atau naik (SHORT) melebihi SL%</div>
             <div>• Order dieksekusi keeper GMX ~1-10 detik setelah submit</div>
+          </div>
+        </div>
+
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+          <h3 className="font-semibold mb-3">gTrade Futures — Gains Network Arbitrum</h3>
+
+          <div className="bg-teal-500/10 border border-teal-500/30 rounded-lg p-3 mb-4 text-xs text-teal-300">
+            ⚡ <strong>gTrade on-chain futures.</strong> Biaya sangat rendah (~$0.01–0.05 per order, hanya gas Arbitrum). Tidak perlu ETH execution fee seperti GMX. Collateral USDC langsung.
+          </div>
+
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-xs text-yellow-300">
+            ⚠️ <strong>Pairs tersedia:</strong> BTC, ETH, LINK, DOGE, SOL, BNB, XRP, AVAX, ARB, MATIC — max leverage hingga 150x
+          </div>
+
+          <Toggle label="Enable gTrade Futures Trading" name="gtrade_enabled" />
+
+          <div className="mt-4 grid grid-cols-3 gap-4">
+            <Field label="Leverage (x)" name="gtrade_leverage" type="number" step="0.5" placeholder="2" />
+            <Field label="Collateral per Trade (% USDC)" name="gtrade_collateral_percent" type="number" step="5" placeholder="10" />
+            <Field label="Stop-Loss %" name="gtrade_sl_percent" type="number" step="0.5" placeholder="3" />
+          </div>
+
+          <div className="mt-3 text-xs text-gray-500 space-y-1">
+            <div>• Collateral 10% + Leverage 2x = Position size 20% USDC per signal</div>
+            <div>• Tidak perlu ETH — hanya gas Arbitrum ~$0.01–0.05</div>
+            <div>• Order dieksekusi langsung via Diamond contract Gains Network</div>
           </div>
         </div>
 

@@ -552,7 +552,7 @@ class ScannerService:
                         f"{opportunity['analysis_text']} AI fallback active because provider failed."
                     )
 
-            ai_limit = 5 if (settings and settings.scan_all_coins) else 3
+            ai_limit = 2 if (settings and settings.scan_all_coins) else 1
             await asyncio.gather(*[_run_ai(opp) for opp in opportunities[:ai_limit]])
 
         if execute_paper and settings:

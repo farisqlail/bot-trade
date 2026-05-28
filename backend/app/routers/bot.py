@@ -39,7 +39,7 @@ async def update_settings(
                 from app.services.defi_service import encrypt_private_key
                 s.defi_wallet_private_key_encrypted = encrypt_private_key(value)
             continue
-        if field in {"polymarket_api_secret", "polymarket_api_passphrase"} and not value:
+        if field == "polymarket_api_secret" and not value:
             continue
         if field != "polymarket_api_secret" or value:
             setattr(s, field, value)
@@ -63,12 +63,11 @@ async def start_bot(
         and (
             not s.polymarket_api_key
             or not s.polymarket_api_secret
-            or not s.polymarket_api_passphrase
         )
     ):
         raise HTTPException(
             status_code=400,
-            detail="Polymarket API key, secret, and passphrase required to start bot",
+            detail="Bybit API key and secret required to start bot",
         )
     s.bot_enabled = True
     await db.flush()

@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, TrendingUp, History, Brain, ShieldCheck, Settings2, LogOut, Zap, BarChart2 } from 'lucide-react'
+import { LayoutDashboard, TrendingUp, History, Brain, ShieldCheck, Settings2, LogOut, Zap, BarChart2, Layers, Triangle, Rocket } from 'lucide-react'
 import clsx from 'clsx'
 
 const NAV_ITEMS = [
@@ -7,7 +7,10 @@ const NAV_ITEMS = [
   { path: '/active-trades', label: 'Active Trades', icon: TrendingUp },
   { path: '/trade-history', label: 'Trade History', icon: History },
   { path: '/ai-analysis', label: 'AI Analysis', icon: Brain },
+  { path: '/altcoins', label: 'Altcoin Scanner', icon: Rocket },
   { path: '/chart', label: 'Smart Chart', icon: BarChart2 },
+  { path: '/futures', label: 'Futures (GMX)', icon: Layers },
+  { path: '/gtrade', label: 'Futures (gTrade)', icon: Triangle },
   { path: '/risk-settings', label: 'Risk Settings', icon: ShieldCheck },
   { path: '/bot-settings', label: 'Bot Settings', icon: Settings2 },
 ]

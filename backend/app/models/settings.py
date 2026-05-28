@@ -324,6 +324,157 @@ class Settings(Base):
         self.notification_settings = payload
 
     @property
+    def gmx_activity_log(self) -> list:
+        raw = (self.notification_settings or {}).get("gmx_activity_log", [])
+        return raw if isinstance(raw, list) else []
+
+    @gmx_activity_log.setter
+    def gmx_activity_log(self, value: list):
+        payload = dict(self.notification_settings or {})
+        payload["gmx_activity_log"] = value if isinstance(value, list) else []
+        self.notification_settings = payload
+
+    # --- gTrade (Gains Network) ---
+
+    @property
+    def gtrade_enabled(self) -> bool:
+        return bool((self.notification_settings or {}).get("gtrade_enabled", False))
+
+    @gtrade_enabled.setter
+    def gtrade_enabled(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["gtrade_enabled"] = bool(value)
+        self.notification_settings = payload
+
+    @property
+    def gtrade_leverage(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("gtrade_leverage", 2.0))
+        except (TypeError, ValueError):
+            return 2.0
+
+    @gtrade_leverage.setter
+    def gtrade_leverage(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["gtrade_leverage"] = max(2.0, min(150.0, float(value)))
+        except (TypeError, ValueError):
+            payload["gtrade_leverage"] = 2.0
+        self.notification_settings = payload
+
+    @property
+    def gtrade_collateral_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("gtrade_collateral_percent", 10.0))
+        except (TypeError, ValueError):
+            return 10.0
+
+    @gtrade_collateral_percent.setter
+    def gtrade_collateral_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["gtrade_collateral_percent"] = max(1.0, min(100.0, float(value)))
+        except (TypeError, ValueError):
+            payload["gtrade_collateral_percent"] = 10.0
+        self.notification_settings = payload
+
+    @property
+    def gtrade_sl_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("gtrade_sl_percent", 3.0))
+        except (TypeError, ValueError):
+            return 3.0
+
+    @gtrade_sl_percent.setter
+    def gtrade_sl_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["gtrade_sl_percent"] = max(0.5, min(50.0, float(value)))
+        except (TypeError, ValueError):
+            payload["gtrade_sl_percent"] = 3.0
+        self.notification_settings = payload
+
+    @property
+    def gtrade_open_trades(self) -> dict:
+        raw = (self.notification_settings or {}).get("gtrade_open_trades", {})
+        return raw if isinstance(raw, dict) else {}
+
+    @gtrade_open_trades.setter
+    def gtrade_open_trades(self, value: dict):
+        payload = dict(self.notification_settings or {})
+        payload["gtrade_open_trades"] = value if isinstance(value, dict) else {}
+        self.notification_settings = payload
+
+    @property
+    def gtrade_activity_log(self) -> list:
+        raw = (self.notification_settings or {}).get("gtrade_activity_log", [])
+        return raw if isinstance(raw, list) else []
+
+    @gtrade_activity_log.setter
+    def gtrade_activity_log(self, value: list):
+        payload = dict(self.notification_settings or {})
+        payload["gtrade_activity_log"] = value if isinstance(value, list) else []
+        self.notification_settings = payload
+
+    @property
+    def bybit_leverage(self) -> int:
+        try:
+            return int((self.notification_settings or {}).get("bybit_leverage", 5))
+        except (TypeError, ValueError):
+            return 5
+
+    @bybit_leverage.setter
+    def bybit_leverage(self, value: int):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["bybit_leverage"] = max(1, min(100, int(value)))
+        except (TypeError, ValueError):
+            payload["bybit_leverage"] = 5
+        self.notification_settings = payload
+
+    @property
+    def bybit_collateral_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("bybit_collateral_percent", 10.0))
+        except (TypeError, ValueError):
+            return 10.0
+
+    @bybit_collateral_percent.setter
+    def bybit_collateral_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["bybit_collateral_percent"] = max(1.0, min(100.0, float(value)))
+        except (TypeError, ValueError):
+            payload["bybit_collateral_percent"] = 10.0
+        self.notification_settings = payload
+
+    @property
+    def bybit_sl_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("bybit_sl_percent", 3.0))
+        except (TypeError, ValueError):
+            return 3.0
+
+    @bybit_sl_percent.setter
+    def bybit_sl_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["bybit_sl_percent"] = max(0.5, min(50.0, float(value)))
+        except (TypeError, ValueError):
+            payload["bybit_sl_percent"] = 3.0
+        self.notification_settings = payload
+
+    @property
+    def continuous_scan_enabled(self) -> bool:
+        return bool((self.notification_settings or {}).get("continuous_scan_enabled", True))
+
+    @continuous_scan_enabled.setter
+    def continuous_scan_enabled(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["continuous_scan_enabled"] = bool(value)
+        self.notification_settings = payload
+
+    @property
     def real_trade_enabled(self) -> bool:
         return bool((self.notification_settings or {}).get("real_trade_enabled", False))
 

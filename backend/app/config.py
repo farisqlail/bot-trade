@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://ollama:11434"
     OLLAMA_MODEL: str = "deepseek-r1:7b"
 
-    AI_ANALYSIS_INTERVAL: int = 300
+    AI_ANALYSIS_INTERVAL: int = 900
 
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"

@@ -7,6 +7,9 @@ import AIAnalysis from './pages/AIAnalysis'
 import RiskSettings from './pages/RiskSettings'
 import BotSettings from './pages/BotSettings'
 import TradingChart from './pages/TradingChart'
+import FuturesTrade from './pages/FuturesTrade'
+import GTradeFutures from './pages/GTradeFutures'
+import AltcoinScanner from './pages/AltcoinScanner'
 import Login from './pages/Login'
 import Register from './pages/Register'
 
@@ -36,6 +39,9 @@ export default function App() {
           <Route path="risk-settings" element={<RiskSettings />} />
           <Route path="bot-settings" element={<BotSettings />} />
           <Route path="chart" element={<TradingChart />} />
+          <Route path="futures" element={<FuturesTrade />} />
+          <Route path="gtrade" element={<GTradeFutures />} />
+          <Route path="altcoins" element={<AltcoinScanner />} />
         </Route>
       </Routes>
     </BrowserRouter>

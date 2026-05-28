@@ -10,45 +10,15 @@ from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-ANALYSIS_PROMPT_TEMPLATE = """You are an expert crypto trading analyst. Analyze this coin for paper trading using Bybit real market data plus Polymarket sentiment context.
+ANALYSIS_PROMPT_TEMPLATE = """Crypto trading analyst. Analyze for paper trading. Bybit price data for execution, Polymarket for sentiment only.
 
-Current Market Data:
-- Symbol: {symbol}
-- Current Price: {price}
-- 24h Change: {change_24h}%
-- Volume 24h: {volume_24h}
-- High 24h: {high_24h}
-- Low 24h: {low_24h}
+{symbol} price={price} chg24h={change_24h}% vol={volume_24h} hi={high_24h} lo={low_24h}
+candles={recent_candles}
+polymarket bias={polymarket_bias_score} markets={polymarket_market_count} detail={polymarket_markets}
+sl_ref={stop_loss} tp_ref={take_profit} risk={risk_percent}%
 
-Recent Price Action:
-{recent_candles}
-
-Polymarket Sentiment Context:
-- Bias Score: {polymarket_bias_score}
-- Related Market Count: {polymarket_market_count}
-- Related Markets:
-{polymarket_markets}
-
-Strategy Parameters:
-- Default Stop Loss Reference: {stop_loss}
-- Default Take Profit Reference: {take_profit}
-- Risk per Trade: {risk_percent}%
-
-Use Polymarket as sentiment/context only, and Bybit price data for trade execution logic.
-
-Respond ONLY with valid JSON (no markdown, no explanation outside JSON):
-{{
-  "trend": "BULLISH|BEARISH|SIDEWAYS",
-  "sentiment": "STRONG_BUY|BUY|HOLD|SELL|STRONG_SELL",
-  "confidence": 0.0,
-  "support_levels": [0.0],
-  "resistance_levels": [0.0],
-  "recommended_action": "BUY|SELL|HOLD",
-  "suggested_entry": 0.0,
-  "suggested_sl": 0.0,
-  "suggested_tp": 0.0,
-  "reasoning": "Brief explanation"
-}}"""
+Reply ONLY valid JSON:
+{{"trend":"BULLISH|BEARISH|SIDEWAYS","sentiment":"STRONG_BUY|BUY|HOLD|SELL|STRONG_SELL","confidence":0.0,"support_levels":[0.0],"resistance_levels":[0.0],"recommended_action":"BUY|SELL|HOLD","suggested_entry":0.0,"suggested_sl":0.0,"suggested_tp":0.0,"reasoning":"brief"}}"""
 
 
 class AIService:
@@ -64,10 +34,10 @@ class AIService:
             volume_24h=market_data.get("volume_24h", 0),
             high_24h=market_data.get("high_24h", 0),
             low_24h=market_data.get("low_24h", 0),
-            recent_candles=json.dumps(market_data.get("candles", []), indent=2),
+            recent_candles=json.dumps(market_data.get("candles", [])[-10:]),
             polymarket_bias_score=market_data.get("polymarket_bias_score", 0),
             polymarket_market_count=market_data.get("polymarket_market_count", 0),
-            polymarket_markets=json.dumps(market_data.get("polymarket_markets", []), indent=2),
+            polymarket_markets=json.dumps(market_data.get("polymarket_markets", [])[:5]),
             stop_loss=settings.DEFAULT_STOP_LOSS,
             take_profit=settings.DEFAULT_TAKE_PROFIT,
             risk_percent=settings.DEFAULT_RISK_PERCENT,
@@ -86,8 +56,8 @@ class AIService:
                 json={
                     "model": settings.DEEPSEEK_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 1024,
+                    "temperature": 0.1,
+                    "max_tokens": 400,
                     "response_format": {"type": "json_object"},
                 },
             )

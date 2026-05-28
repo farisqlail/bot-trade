@@ -71,6 +71,7 @@ export const aiApi = {
   },
   watchAndScan: (symbol, execute_defi = true) =>
     api.post('/ai/watch', { symbol, execute_defi }, { timeout: 300000 }),
+  getAltcoins: (params) => api.get('/ai/altcoins', { params }),
 }
 
 export const riskApi = {
@@ -99,6 +100,32 @@ export const defiApi = {
   testConnection: (data) => api.post('/defi/test-connection', data),
   getBalance: () => api.get('/defi/balance'),
   swap: (data) => api.post('/defi/swap', data),
+}
+
+export const gtradeApi = {
+  getPairs: () => api.get('/gtrade/pairs'),
+  getStatus: () => api.get('/gtrade/status'),
+  getPositions: () => api.get('/gtrade/positions'),
+  openTrade: (data) => api.post('/gtrade/trade', data),
+  closePosition: (symbol) => api.post('/gtrade/close', { symbol }),
+  applyAiTpsl: (symbol = null) => api.post('/gtrade/apply-ai-tpsl', { symbol }, { timeout: 120000 }),
+  forceCloseAll: () => api.post('/gtrade/force-close-all', {}, { timeout: 120000 }),
+  getLogs: () => api.get('/gtrade/logs'),
+}
+
+export const bybitFuturesApi = {
+  openTrade: (data) => api.post('/bybit-futures/trade', data),
+  getBalance: () => api.get('/bybit-futures/balance'),
+  getDepositAddress: (coin = 'USDC') => api.get('/bybit-futures/deposit-address', { params: { coin } }),
+}
+
+export const gmxApi = {
+  getMarkets: () => api.get('/gmx/markets'),
+  getStatus: () => api.get('/gmx/status'),
+  getPositions: () => api.get('/gmx/positions'),
+  openTrade: (data) => api.post('/gmx/trade', data),
+  closePosition: (symbol) => api.post('/gmx/close', { symbol }),
+  getLogs: () => api.get('/gmx/logs'),
 }
 
 export const chartApi = {

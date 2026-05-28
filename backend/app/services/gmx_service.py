@@ -10,16 +10,17 @@ from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# GMX V2 Contracts — Arbitrum One
-GMX_EXCHANGE_ROUTER = "0x7C68C7866A64FA2160F78EEaE12217FFbf871fa8"
+# GMX V2 Synthetics Contracts — Arbitrum One (updated deployment)
+# Source: https://github.com/gmx-io/gmx-synthetics/blob/main/deployments/arbitrum/deployment.json
+GMX_EXCHANGE_ROUTER = "0x900173A66dBE45871b62eCa7df4e2A68B1E32613"
 GMX_ORDER_VAULT = "0x31eF83a530Fde1B38EE9A18093A333D8Bbbc40D5"
 GMX_READER = "0x60a0fF4cDaF0f6D496d71e0bC0fFa86FE8E6B23c"
 GMX_DATASTORE = "0xFD70de6b91282D8017aA4E741e9AE325CAb992d8"
 ARB_RPC = "https://arb1.arbitrum.io/rpc"
 USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
 
-# Execution fee paid to GMX keeper (~0.0005 ETH, partially refunded)
-EXECUTION_FEE_ETH = 0.0005
+# Execution fee paid to GMX keeper (~0.001 ETH, partially refunded)
+EXECUTION_FEE_ETH = 0.001
 
 ORDER_TYPE_MARKET_INCREASE = 2
 ORDER_TYPE_MARKET_DECREASE = 4
@@ -210,7 +211,7 @@ class GMXService:
         return self._fernet
 
     def _decrypt_key(self, encrypted: str) -> str:
-        return self._get_fernet().decrypt(encrypted.encode()).decode()
+        return self._get_fernet().decrypt(encrypted.strip().encode()).decode().strip()
 
     @staticmethod
     def get_available_markets() -> list[dict]:
@@ -254,11 +255,16 @@ class GMXService:
             })
         return positions
 
+    async def _get_gas_price(self) -> int:
+        """Fetch gas price with 30% buffer above base fee to avoid stale-price rejections."""
+        raw = await self.w3.eth.gas_price
+        return int(raw * 1.3)
+
     async def _ensure_usdc_approved(self, account, usdc_contract, router_addr: str, collateral_amount: int) -> int:
         """Approve USDC to router if needed. Returns new nonce offset."""
         wallet = account.address
         nonce = await self.w3.eth.get_transaction_count(wallet)
-        gas_price = await self.w3.eth.gas_price
+        gas_price = await self._get_gas_price()
 
         allowance = await usdc_contract.functions.allowance(wallet, router_addr).call()
         if allowance >= collateral_amount:
@@ -312,11 +318,20 @@ class GMXService:
             return {"status": "error", "error": f"Insufficient USDC: {usdc_balance/1e6:.2f} < {collateral_usdc:.2f}"}
 
         eth_balance = await self.w3.eth.get_balance(wallet)
-        if eth_balance < exec_fee_wei * 3:
-            return {"status": "error", "error": f"Insufficient ETH for execution fee: {eth_balance/1e18:.6f}"}
+        gas_price = await self._get_gas_price()
+        estimated_gas_cost = gas_price * 1_700_000  # 1.5M gas limit + headroom
+        min_eth_needed = exec_fee_wei + estimated_gas_cost
+        if eth_balance < min_eth_needed:
+            return {
+                "status": "error",
+                "error": (
+                    f"Insufficient ETH for execution fee: have {eth_balance/1e18:.6f} ETH, "
+                    f"need ~{min_eth_needed/1e18:.6f} ETH "
+                    f"(fee {EXECUTION_FEE_ETH} + gas ~{estimated_gas_cost/1e18:.6f})"
+                ),
+            }
 
         nonce = await self._ensure_usdc_approved(account, usdc_contract, router_addr, collateral_amount)
-        gas_price = await self.w3.eth.gas_price
         acceptable_price = self._acceptable_price(current_price, is_long, slippage)
 
         order_params = (
@@ -335,7 +350,7 @@ class GMXService:
             [send_tokens, send_native, create_order]
         ).build_transaction({
             "from": wallet, "nonce": nonce, "gasPrice": gas_price,
-            "gas": 1_500_000, "value": exec_fee_wei,
+            "gas": 2_000_000, "value": exec_fee_wei,
         })
 
         signed = account.sign_transaction(multicall_tx)
@@ -343,7 +358,16 @@ class GMXService:
         receipt = await self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
 
         if receipt["status"] != 1:
-            return {"status": "error", "error": "Transaction reverted", "tx_hash": tx_hash.hex()}
+            revert_reason = "unknown"
+            try:
+                await self.w3.eth.call(multicall_tx, block_identifier=receipt["blockNumber"])
+            except Exception as call_err:
+                revert_reason = str(call_err)
+            logger.error("gmx_open_reverted", tx=tx_hash.hex(), gas_used=receipt["gasUsed"],
+                         symbol=symbol, is_long=is_long, reason=revert_reason)
+            return {"status": "error",
+                    "error": f"Transaction reverted: {revert_reason}",
+                    "tx_hash": tx_hash.hex()}
 
         return {
             "status": "success",
@@ -381,11 +405,19 @@ class GMXService:
         exec_fee_wei = int(EXECUTION_FEE_ETH * 1e18)
 
         eth_balance = await self.w3.eth.get_balance(wallet)
-        if eth_balance < exec_fee_wei * 3:
-            return {"status": "error", "error": f"Insufficient ETH for close execution fee"}
+        gas_price = await self._get_gas_price()
+        estimated_gas_cost = gas_price * 1_400_000
+        min_eth_needed = exec_fee_wei + estimated_gas_cost
+        if eth_balance < min_eth_needed:
+            return {
+                "status": "error",
+                "error": (
+                    f"Insufficient ETH for close execution fee: have {eth_balance/1e18:.6f} ETH, "
+                    f"need ~{min_eth_needed/1e18:.6f} ETH"
+                ),
+            }
 
         nonce = await self.w3.eth.get_transaction_count(wallet)
-        gas_price = await self.w3.eth.gas_price
         # For decrease: acceptable_price is inverted (long close = min acceptable, short close = max acceptable)
         acceptable_price = self._acceptable_price(current_price, not is_long, slippage)
 
@@ -404,7 +436,7 @@ class GMXService:
             [send_native, create_order]
         ).build_transaction({
             "from": wallet, "nonce": nonce, "gasPrice": gas_price,
-            "gas": 1_200_000, "value": exec_fee_wei,
+            "gas": 1_600_000, "value": exec_fee_wei,
         })
 
         signed = account.sign_transaction(multicall_tx)
@@ -412,7 +444,16 @@ class GMXService:
         receipt = await self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
 
         if receipt["status"] != 1:
-            return {"status": "error", "error": "Transaction reverted", "tx_hash": tx_hash.hex()}
+            revert_reason = "unknown"
+            try:
+                await self.w3.eth.call(multicall_tx, block_identifier=receipt["blockNumber"])
+            except Exception as call_err:
+                revert_reason = str(call_err)
+            logger.error("gmx_close_reverted", tx=tx_hash.hex(), gas_used=receipt["gasUsed"],
+                         symbol=symbol, is_long=is_long, reason=revert_reason)
+            return {"status": "error",
+                    "error": f"Transaction reverted: {revert_reason}",
+                    "tx_hash": tx_hash.hex()}
 
         return {
             "status": "success",

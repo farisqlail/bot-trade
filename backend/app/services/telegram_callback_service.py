@@ -450,14 +450,29 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
                         f"Tx: <code>{result.get('tx_hash')}</code>\n"
                         f"⏳ Pending keeper execution (~1-10s)"
                     )
+                    from datetime import datetime, timezone
                     open_positions = dict(s.gmx_open_positions)
                     open_positions[symbol] = {
                         "is_long": is_long,
                         "entry_price": current_price,
                         "size_usd": result.get("size_usd", 0.0),
                         "collateral_usdc": collateral,
+                        "opened_at": datetime.now(timezone.utc).isoformat(),
                     }
                     s.gmx_open_positions = open_positions
+                    activity_log = list(s.gmx_activity_log)
+                    activity_log.insert(0, {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "event": "OPENED",
+                        "symbol": symbol,
+                        "direction": "LONG" if is_long else "SHORT",
+                        "entry_price": current_price,
+                        "size_usd": result.get("size_usd", 0.0),
+                        "collateral_usdc": collateral,
+                        "tx_hash": result.get("tx_hash"),
+                        "source": "telegram",
+                    })
+                    s.gmx_activity_log = activity_log[:50]
                     await db.commit()
                 else:
                     results.append(f"⚠️ <b>GMX Failed</b> <code>{symbol}</code>\n<code>{result.get('error')}</code>")
