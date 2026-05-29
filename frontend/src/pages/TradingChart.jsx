@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Activity, RefreshCw } from 'lucide-react'
 import clsx from 'clsx'
 import SmartChart from '../components/chart/SmartChart'
@@ -19,7 +20,8 @@ const TIMEFRAMES = [
 const DEFAULT_SYMBOL = 'BTCUSDT'
 
 export default function TradingChart() {
-  const [symbol, setSymbol] = useState(DEFAULT_SYMBOL)
+  const [searchParams] = useSearchParams()
+  const [symbol, setSymbol] = useState(searchParams.get('symbol') || DEFAULT_SYMBOL)
   const [timeframe, setTimeframe] = useState('60')
   const { bundle, watchlist, loading, error, reload } = useChartData(symbol, timeframe)
 

@@ -222,7 +222,7 @@ async def _fetch_active_trade(
 
 @router.get("/watchlist/ranking", response_model=List[WatchlistItem])
 async def get_watchlist_ranking(
-    limit: int = Query(5, ge=1, le=20),
+    limit: int = Query(30, ge=1, le=100),
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):

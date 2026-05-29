@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
 import { RefreshCw, TrendingUp, TrendingDown, Minus, AlertCircle } from 'lucide-react'
 import { aiApi } from '../services/api'
@@ -30,6 +31,7 @@ export default function AltcoinScanner() {
   const [lastRun, setLastRun] = useState(null)
   const [minVolume, setMinVolume] = useState(500000)
   const [limit, setLimit] = useState(30)
+  const navigate = useNavigate()
 
   const fetchAltcoins = useCallback(async () => {
     setLoading(true)
@@ -171,7 +173,8 @@ export default function AltcoinScanner() {
                 return (
                   <tr
                     key={coin.symbol}
-                    className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
+                    onClick={() => navigate(`/chart?symbol=${coin.symbol}`)}
+                    className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors cursor-pointer"
                   >
                     <td className="px-4 py-3 text-gray-600 text-xs">{i + 1}</td>
                     <td className="px-4 py-3">

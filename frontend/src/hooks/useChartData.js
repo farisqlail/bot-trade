@@ -29,7 +29,7 @@ export function useChartData(symbol, timeframe = '60') {
     try {
       const [bundleRes, watchlistRes] = await Promise.allSettled([
         chartApi.getBundle(symbol, timeframe),
-        chartApi.getWatchlist(),
+        chartApi.getWatchlist(30),
       ])
       if (bundleRes.status === 'fulfilled') setBundle(bundleRes.value.data)
       else setError(bundleRes.reason?.message || 'Failed to load chart')

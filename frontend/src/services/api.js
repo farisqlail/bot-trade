@@ -135,7 +135,7 @@ export const chartApi = {
     api.get(`/chart/${symbol}/candles`, { params: { interval, limit } }),
   getSignal: (symbol) => api.get(`/chart/${symbol}/signal`),
   getActiveTrade: (symbol) => api.get(`/chart/${symbol}/active-trade`),
-  getWatchlist: (limit = 5) => api.get('/chart/watchlist/ranking', { params: { limit } }),
+  getWatchlist: (limit = 30) => api.get('/chart/watchlist/ranking', { params: { limit } }),
 }
 
 export default api
