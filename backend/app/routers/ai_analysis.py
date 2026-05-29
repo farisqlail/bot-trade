@@ -242,6 +242,7 @@ async def scan_altcoins(
     min_volume_usd: float = Query(500_000, ge=0),
     action_filter: Optional[str] = Query(None, description="BUY, SELL, or HOLD"),
     user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
     exchange = ExchangeService()
     try:
@@ -279,24 +280,59 @@ async def scan_altcoins(
             "sentiment": sentiment,
         })
 
+    results.sort(key=lambda x: abs(x["score"]), reverse=True)
+    top_results = results[:limit]
+
+    # Persist top results to ai_analysis so Smart Chart watchlist populates
+    ai_svc = AIService(db)
+    for r in top_results:
+        is_buy = r["recommended_action"] in {"BUY", "STRONG_BUY"}
+        is_sell = r["recommended_action"] in {"SELL", "STRONG_SELL"}
+        price = float(r["price"] or 0.0)
+        sl = round(price * (0.985 if is_buy else 1.015 if is_sell else 0.990), 8)
+        tp = round(price * (1.030 if is_buy else 0.970 if is_sell else 1.010), 8)
+        await ai_svc.save_heuristic_result(
+            r["symbol"],
+            {
+                "trend": r["sentiment"],
+                "sentiment": r["recommended_action"],
+                "confidence": min(abs(r["score"]) * 10, 0.95),
+                "analysis_text": f"Altcoin scan: 24h {r['change_24h']:+.2f}%, score {r['score']:.4f}",
+                "price_at_analysis": price,
+                "recommended_action": r["recommended_action"],
+                "suggested_entry": price,
+                "suggested_sl": sl,
+                "suggested_tp": tp,
+            },
+            {
+                "price": price,
+                "change_24h": r["change_24h"],
+                "volume_24h": r.get("volume_24h", 0),
+                "turnover_24h": r.get("turnover_24h", 0),
+            },
+        )
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+
+    # Apply action_filter for the API response (save already done for all top coins)
+    filtered = top_results
     if action_filter:
         af = action_filter.upper()
         if af == "BUY":
-            results = [r for r in results if r["recommended_action"] in {"BUY", "STRONG_BUY"}]
+            filtered = [r for r in top_results if r["recommended_action"] in {"BUY", "STRONG_BUY"}]
         elif af == "SELL":
-            results = [r for r in results if r["recommended_action"] in {"SELL", "STRONG_SELL"}]
-        elif af in {"HOLD", "BUY", "SELL"}:
-            results = [r for r in results if r["recommended_action"] == af]
+            filtered = [r for r in top_results if r["recommended_action"] in {"SELL", "STRONG_SELL"}]
+        elif af == "HOLD":
+            filtered = [r for r in top_results if r["recommended_action"] == "HOLD"]
 
-    results.sort(key=lambda x: abs(x["score"]), reverse=True)
-    results = results[:limit]
-
-    buy_count = sum(1 for r in results if r["recommended_action"] in {"BUY", "STRONG_BUY"})
-    sell_count = sum(1 for r in results if r["recommended_action"] in {"SELL", "STRONG_SELL"})
+    buy_count = sum(1 for r in filtered if r["recommended_action"] in {"BUY", "STRONG_BUY"})
+    sell_count = sum(1 for r in filtered if r["recommended_action"] in {"SELL", "STRONG_SELL"})
 
     return {
-        "altcoins": results,
-        "total": len(results),
+        "altcoins": filtered,
+        "total": len(filtered),
         "scanned": len(altcoins),
         "buy_signals": buy_count,
         "sell_signals": sell_count,
