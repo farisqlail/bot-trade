@@ -1,5 +1,3 @@
-import base64
-import hashlib
 from typing import Optional
 
 from eth_account import Account
@@ -7,6 +5,7 @@ from web3 import AsyncWeb3
 
 from app.config import settings as app_settings
 from app.core.logging_config import get_logger
+from app.utils.crypto import decrypt as _crypto_decrypt
 
 logger = get_logger(__name__)
 
@@ -201,17 +200,8 @@ class GMXService:
             address=AsyncWeb3.to_checksum_address(GMX_READER),
             abi=READER_ABI,
         )
-        self._fernet = None
-
-    def _get_fernet(self):
-        if self._fernet is None:
-            from cryptography.fernet import Fernet
-            key = hashlib.sha256(app_settings.SECRET_KEY.encode()).digest()
-            self._fernet = Fernet(base64.urlsafe_b64encode(key))
-        return self._fernet
-
     def _decrypt_key(self, encrypted: str) -> str:
-        return self._get_fernet().decrypt(encrypted.strip().encode()).decode().strip()
+        return _crypto_decrypt(encrypted.strip()).strip()
 
     @staticmethod
     def get_available_markets() -> list[dict]:

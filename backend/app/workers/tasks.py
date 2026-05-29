@@ -1,6 +1,7 @@
 import asyncio
 from app.workers.celery_app import celery_app
 from app.core.logging_config import get_logger
+from app.utils.crypto import safe_decrypt as _safe_decrypt
 
 logger = get_logger(__name__)
 
@@ -140,23 +141,6 @@ def run_auto_tuning(self):
         raise self.retry(exc=exc, countdown=120)
 
 
-@celery_app.task(name="app.workers.tasks.process_telegram_callbacks", bind=True)
-def process_telegram_callbacks(self):
-    async def _run():
-        from app.database import AsyncSessionLocal
-        from app.services.telegram_callback_service import process_telegram_callbacks as _process
-
-        async with AsyncSessionLocal() as db:
-            count = await _process(db)
-            if count:
-                logger.info("telegram_callbacks_processed", count=count)
-
-    try:
-        run_async(_run())
-    except Exception as exc:
-        logger.error("process_telegram_callbacks_error", error=str(exc))
-
-
 @celery_app.task(name="app.workers.tasks.check_risk_limits", bind=True)
 def check_risk_limits(self):
     async def _run():
@@ -290,12 +274,14 @@ def monitor_bybit_positions(self):
                 # Get API keys for this user
                 s_result = await db.execute(select(Settings).where(Settings.user_id == trade.user_id))
                 s = s_result.scalar_one_or_none()
-                if not s or not s.polymarket_api_key or not s.polymarket_api_secret:
+                _api_key = _safe_decrypt(s.polymarket_api_key)
+                _api_secret = _safe_decrypt(s.polymarket_api_secret)
+                if not s or not _api_key or not _api_secret:
                     continue
 
                 order_svc = BybitOrderService(
-                    api_key=s.polymarket_api_key,
-                    api_secret=s.polymarket_api_secret,
+                    api_key=_api_key,
+                    api_secret=_api_secret,
                     testnet=s.use_public_data_only,
                 )
 

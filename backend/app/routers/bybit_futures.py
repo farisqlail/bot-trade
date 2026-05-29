@@ -12,6 +12,7 @@ from app.models.settings import Settings
 from app.services.bybit_order_service import BybitOrderService
 from app.services.exchange_service import ExchangeService
 from app.core.logging_config import get_logger
+from app.utils.crypto import safe_decrypt as _safe_decrypt
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/bybit-futures", tags=["bybit-futures"])
@@ -51,8 +52,8 @@ async def open_bybit_futures_trade(
     if not s:
         raise HTTPException(status_code=404, detail="Settings not found")
 
-    api_key = s.polymarket_api_key or app_settings.BYBIT_API_KEY
-    api_secret = s.polymarket_api_secret or app_settings.BYBIT_API_SECRET
+    api_key = _safe_decrypt(s.polymarket_api_key) or app_settings.BYBIT_API_KEY
+    api_secret = _safe_decrypt(s.polymarket_api_secret) or app_settings.BYBIT_API_SECRET
     if not api_key or not api_secret:
         raise HTTPException(status_code=400, detail="Bybit API keys not configured. Set in Bot Settings → Bybit Futures API.")
     key_source = "db" if s.polymarket_api_key else "env"
@@ -153,8 +154,8 @@ async def get_bybit_balance(
     if not s:
         raise HTTPException(status_code=404, detail="Settings not found")
 
-    api_key = s.polymarket_api_key or app_settings.BYBIT_API_KEY
-    api_secret = s.polymarket_api_secret or app_settings.BYBIT_API_SECRET
+    api_key = _safe_decrypt(s.polymarket_api_key) or app_settings.BYBIT_API_KEY
+    api_secret = _safe_decrypt(s.polymarket_api_secret) or app_settings.BYBIT_API_SECRET
     if not api_key or not api_secret:
         return {"usdt": 0.0, "usdc": 0.0, "total": 0.0, "configured": False}
 
@@ -178,8 +179,8 @@ async def get_deposit_address(
     if not s:
         raise HTTPException(status_code=404, detail="Settings not found")
 
-    api_key = s.polymarket_api_key or app_settings.BYBIT_API_KEY
-    api_secret = s.polymarket_api_secret or app_settings.BYBIT_API_SECRET
+    api_key = _safe_decrypt(s.polymarket_api_key) or app_settings.BYBIT_API_KEY
+    api_secret = _safe_decrypt(s.polymarket_api_secret) or app_settings.BYBIT_API_SECRET
     if not api_key or not api_secret:
         raise HTTPException(status_code=400, detail="Bybit API keys not configured.")
 

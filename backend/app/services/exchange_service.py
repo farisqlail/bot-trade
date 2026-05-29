@@ -6,8 +6,10 @@ import httpx
 
 from app.config import settings
 from app.core.logging_config import get_logger
+from app.utils.retry import http_retry
 
 logger = get_logger(__name__)
+_retry = http_retry(logger)
 
 # SSL verification setting: use certifi CA bundle by default, or disable if BYBIT_VERIFY_SSL=False
 _SSL_VERIFY = certifi.where() if settings.BYBIT_VERIFY_SSL else False
@@ -67,6 +69,7 @@ class ExchangeService:
             return values or self.DEFAULT_WATCHLIST
         return self.DEFAULT_WATCHLIST
 
+    @_retry
     async def get_all_tickers(self, min_turnover_usd: float = 0.0) -> list[dict]:
         """One batch call → all active linear USDT perpetuals sorted by turnover."""
         async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
@@ -104,6 +107,7 @@ class ExchangeService:
         tickers.sort(key=lambda t: abs(t["change_24h"]), reverse=True)
         return tickers
 
+    @_retry
     async def get_ticker(self, symbol: str) -> dict:
         async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
             response = await client.get(
@@ -126,6 +130,7 @@ class ExchangeService:
             "low_24h": float(data.get("lowPrice24h") or 0.0),
         }
 
+    @_retry
     async def get_klines(self, symbol: str, interval: str = "60", limit: int = 10) -> list:
         async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
             response = await client.get(
@@ -155,23 +160,26 @@ class ExchangeService:
         candles.sort(key=lambda candle: candle["open_time"])
         return candles
 
+    @_retry
+    async def _fetch_polymarket_raw(self, query: str) -> dict:
+        async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
+            response = await client.get(
+                f"{self.gamma_base_url}/public-search",
+                params={
+                    "q": query,
+                    "events_status": "active",
+                    "limit_per_type": 5,
+                    "search_profiles": "false",
+                    "search_tags": "false",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def _search_polymarket_context(self, symbol: str) -> dict:
         query = self.POLYMARKET_QUERIES.get(symbol.upper(), symbol.replace("USDT", "").lower())
         try:
-            async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
-                response = await client.get(
-                    f"{self.gamma_base_url}/public-search",
-                    params={
-                        "q": query,
-                        "events_status": "active",
-                        "limit_per_type": 5,
-                        "search_profiles": "false",
-                        "search_tags": "false",
-                    },
-                )
-                if response.status_code >= 400:
-                    return {"polymarket_bias_score": 0.0, "polymarket_market_count": 0, "polymarket_markets": []}
-                payload = response.json()
+            payload = await self._fetch_polymarket_raw(query)
         except Exception as exc:
             logger.warning("polymarket_context_fetch_failed", symbol=symbol, error=str(exc))
             return {"polymarket_bias_score": 0.0, "polymarket_market_count": 0, "polymarket_markets": []}

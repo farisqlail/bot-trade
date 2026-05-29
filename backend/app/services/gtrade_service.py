@@ -1,7 +1,5 @@
 import asyncio
 import aiohttp
-import base64
-import hashlib
 import time
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -10,6 +8,7 @@ from typing import Optional
 
 from app.core.logging_config import get_logger
 from app.config import settings as app_settings
+from app.utils.crypto import decrypt as _crypto_decrypt
 
 logger = get_logger(__name__)
 
@@ -131,17 +130,8 @@ class GTradeService:
             self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         except Exception:
             pass
-        self._fernet = None
-
-    def _get_fernet(self):
-        if self._fernet is None:
-            from cryptography.fernet import Fernet
-            key = hashlib.sha256(app_settings.SECRET_KEY.encode()).digest()
-            self._fernet = Fernet(base64.urlsafe_b64encode(key))
-        return self._fernet
-
     def _decrypt_key(self, encrypted: str) -> str:
-        return self._get_fernet().decrypt(encrypted.strip().encode()).decode().strip()
+        return _crypto_decrypt(encrypted.strip()).strip()
 
     async def fetch_pairs_from_api(self) -> dict:
         """Fetch all crypto pairs from Gains Network API. Caches for 1h. Falls back to GTRADE_PAIRS."""

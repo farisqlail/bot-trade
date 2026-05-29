@@ -7,8 +7,10 @@ from sqlalchemy import select, desc
 from app.models.ai_analysis import AIAnalysis
 from app.config import settings
 from app.core.logging_config import get_logger
+from app.utils.retry import http_retry
 
 logger = get_logger(__name__)
+_retry = http_retry(logger)
 
 ANALYSIS_PROMPT_TEMPLATE = """Crypto trading analyst. Analyze for paper trading. Bybit price data for execution, Polymarket for sentiment only.
 
@@ -43,6 +45,7 @@ class AIService:
             risk_percent=settings.DEFAULT_RISK_PERCENT,
         )
 
+    @_retry
     async def _call_deepseek_api(self, prompt: str) -> tuple[str, int]:
         """Call DeepSeek Cloud API (OpenAI-compatible)."""
         start = time.time()
@@ -69,6 +72,7 @@ class AIService:
                         tokens=data.get("usage", {}), time_ms=elapsed_ms)
             return text, elapsed_ms
 
+    @_retry
     async def _call_ollama(self, prompt: str) -> tuple[str, int]:
         """Call local Ollama instance."""
         start = time.time()

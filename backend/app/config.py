@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     SECRET_KEY: str
+    ENCRYPTION_KEY: str = ""
     API_V1_STR: str = "/api/v1"
 
     DATABASE_URL: str
@@ -64,6 +65,8 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    TELEGRAM_WEBHOOK_URL: str = ""
+    TELEGRAM_WEBHOOK_SECRET: str = ""
 
     @validator("CORS_ORIGINS", pre=True)
     def parse_cors_origins(cls, v):

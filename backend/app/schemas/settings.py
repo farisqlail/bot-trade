@@ -69,8 +69,7 @@ class SettingsResponse(BaseModel):
     ai_analysis_enabled: bool
     ai_analysis_interval: int
     use_public_data_only: bool
-    polymarket_api_key: Optional[str] = None
-    polymarket_api_passphrase: Optional[str] = None
+    polymarket_has_api_key: bool = False
     scanner_watchlist: list[str]
     paper_balance: float
     scan_all_coins: bool = False

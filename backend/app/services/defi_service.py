@@ -1,10 +1,7 @@
-import base64
-import hashlib
 import time
 from typing import Optional
 
 import httpx
-from cryptography.fernet import Fernet
 from eth_account import Account
 from web3 import AsyncWeb3, Web3
 
@@ -149,17 +146,14 @@ SWAP_ROUTER_ABI = [
 ]
 
 
-def _get_fernet() -> Fernet:
-    key_bytes = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
-    return Fernet(base64.urlsafe_b64encode(key_bytes))
-
-
 def encrypt_private_key(private_key: str) -> str:
-    return _get_fernet().encrypt(private_key.encode()).decode()
+    from app.utils.crypto import encrypt
+    return encrypt(private_key)
 
 
 def decrypt_private_key(encrypted: str) -> str:
-    return _get_fernet().decrypt(encrypted.encode()).decode()
+    from app.utils.crypto import decrypt
+    return decrypt(encrypted)
 
 
 class DeFiService:

@@ -1,8 +1,10 @@
 import httpx
 from app.config import settings
 from app.core.logging_config import get_logger
+from app.utils.retry import http_retry
 
 logger = get_logger(__name__)
+_retry = http_retry(logger)
 
 
 class TelegramService:
@@ -13,18 +15,26 @@ class TelegramService:
         self.chat_id = settings.TELEGRAM_CHAT_ID
         self.enabled = bool(self.bot_token and self.chat_id)
 
+    @_retry
+    async def _post(self, endpoint: str, body: dict) -> dict:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{self.BASE_URL}/bot{self.bot_token}/{endpoint}",
+                json=body,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     async def send_message(self, text: str) -> bool:
         if not self.enabled:
             return False
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{self.BASE_URL}/bot{self.bot_token}/sendMessage",
-                    json={"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"},
-                )
-                resp.raise_for_status()
-                logger.info("telegram_send_ok", chat_id=self.chat_id)
-                return True
+            await self._post(
+                "sendMessage",
+                {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"},
+            )
+            logger.info("telegram_send_ok", chat_id=self.chat_id)
+            return True
         except Exception as exc:
             logger.warning("telegram_send_failed", error=str(exc), chat_id=self.chat_id)
             return False
@@ -101,21 +111,15 @@ class TelegramService:
         if not self.enabled:
             return None
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{self.BASE_URL}/bot{self.bot_token}/sendMessage",
-                    json={
-                        "chat_id": self.chat_id,
-                        "text": text,
-                        "parse_mode": "HTML",
-                        "reply_markup": {"inline_keyboard": inline_keyboard},
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                msg_id = data.get("result", {}).get("message_id")
-                logger.info("telegram_keyboard_message_sent", message_id=msg_id)
-                return msg_id
+            data = await self._post("sendMessage", {
+                "chat_id": self.chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": inline_keyboard},
+            })
+            msg_id = data.get("result", {}).get("message_id")
+            logger.info("telegram_keyboard_message_sent", message_id=msg_id)
+            return msg_id
         except Exception as exc:
             logger.warning("telegram_keyboard_send_failed", error=str(exc))
             return None
@@ -124,18 +128,13 @@ class TelegramService:
         if not self.enabled:
             return False
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{self.BASE_URL}/bot{self.bot_token}/editMessageText",
-                    json={
-                        "chat_id": self.chat_id,
-                        "message_id": message_id,
-                        "text": text,
-                        "parse_mode": "HTML",
-                    },
-                )
-                resp.raise_for_status()
-                return True
+            await self._post("editMessageText", {
+                "chat_id": self.chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": "HTML",
+            })
+            return True
         except Exception as exc:
             logger.warning("telegram_edit_message_failed", error=str(exc))
             return False
@@ -144,13 +143,11 @@ class TelegramService:
         if not self.enabled:
             return False
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{self.BASE_URL}/bot{self.bot_token}/answerCallbackQuery",
-                    json={"callback_query_id": callback_query_id, "text": text},
-                )
-                resp.raise_for_status()
-                return True
+            await self._post("answerCallbackQuery", {
+                "callback_query_id": callback_query_id,
+                "text": text,
+            })
+            return True
         except Exception as exc:
             logger.warning("telegram_answer_callback_failed", error=str(exc))
             return False

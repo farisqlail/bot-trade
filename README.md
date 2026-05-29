@@ -4,6 +4,73 @@ Bot trading crypto otomatis dengan AI analysis, DeFi spot trading (Uniswap V3 mu
 
 ---
 
+## Setup Telegram Webhook
+
+Bot menggunakan webhook mode (bukan polling). Telegram mengirim update langsung ke endpoint backend kamu.
+
+### Production
+
+Set di `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=123456:ABC-your-token
+TELEGRAM_CHAT_ID=your-chat-id
+TELEGRAM_WEBHOOK_URL=https://yourdomain.com/api/v1/webhook/telegram
+TELEGRAM_WEBHOOK_SECRET=random-secret-string  # min 1 char, max 256 chars
+```
+
+Backend otomatis memanggil `setWebhook` ke Telegram saat startup.
+
+### Development Lokal dengan ngrok
+
+Webhook butuh URL publik HTTPS. Untuk development lokal, gunakan ngrok:
+
+**1. Install ngrok**
+```bash
+# macOS
+brew install ngrok
+
+# Windows (via scoop)
+scoop install ngrok
+
+# atau download di https://ngrok.com/download
+```
+
+**2. Jalankan backend**
+```bash
+docker compose up -d postgres redis backend
+```
+
+**3. Expose port 8000 via ngrok**
+```bash
+ngrok http 8000
+```
+
+ngrok akan menampilkan URL seperti: `https://abc123.ngrok-free.app`
+
+**4. Set webhook URL di `.env`**
+```env
+TELEGRAM_WEBHOOK_URL=https://abc123.ngrok-free.app/api/v1/webhook/telegram
+TELEGRAM_WEBHOOK_SECRET=dev-secret-local
+```
+
+**5. Restart backend** agar startup event memanggil `setWebhook`:
+```bash
+docker compose restart backend
+```
+
+**6. Verifikasi webhook terdaftar**
+```bash
+curl https://api.telegram.org/bot<YOUR_TOKEN>/getWebhookInfo
+```
+
+Response `"url"` harus match dengan `TELEGRAM_WEBHOOK_URL`.
+
+> **Catatan:** Setiap kali ngrok restart, URL berubah. Update `.env` dan restart backend lagi.
+> Untuk URL stabil di development, gunakan [ngrok static domain](https://ngrok.com/docs/getting-started/#step-4-set-up-a-static-domain) (free tier tersedia).
+
+---
+
 ## Fitur
 
 ### Dashboard

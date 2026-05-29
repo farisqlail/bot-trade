@@ -6,6 +6,7 @@ from app.core.security import get_current_user_id
 from app.models.settings import Settings
 from app.schemas.settings import SettingsUpdate, SettingsResponse
 from app.config import settings as app_settings
+from app.utils.crypto import encrypt as _encrypt
 
 router = APIRouter(prefix="/bot", tags=["bot"])
 
@@ -33,16 +34,18 @@ async def update_settings(
     if not s:
         raise HTTPException(status_code=404, detail="Settings not found")
 
+    _ENCRYPT_FIELDS = {"polymarket_api_key", "polymarket_api_secret", "polymarket_api_passphrase"}
+
     for field, value in update_data.model_dump(exclude_none=True).items():
         if field == "defi_private_key":
             if value:
-                from app.services.defi_service import encrypt_private_key
-                s.defi_wallet_private_key_encrypted = encrypt_private_key(value)
+                s.defi_wallet_private_key_encrypted = _encrypt(value)
             continue
-        if field == "polymarket_api_secret" and not value:
+        if field in _ENCRYPT_FIELDS:
+            if value:
+                setattr(s, field, _encrypt(value))
             continue
-        if field != "polymarket_api_secret" or value:
-            setattr(s, field, value)
+        setattr(s, field, value)
 
     await db.flush()
     await db.refresh(s)

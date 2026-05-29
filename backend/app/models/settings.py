@@ -38,6 +38,10 @@ class Settings(Base):
     user = relationship("User", back_populates="settings")
 
     @property
+    def polymarket_has_api_key(self) -> bool:
+        return bool(self.polymarket_api_key)
+
+    @property
     def polymarket_api_passphrase(self):
         return (self.notification_settings or {}).get("polymarket_api_passphrase")
 

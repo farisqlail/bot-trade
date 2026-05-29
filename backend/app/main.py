@@ -20,7 +20,7 @@ from app.core.exceptions import (
     validation_exception_handler, generic_exception_handler,
 )
 from app.routers import auth, dashboard, trades, ai_analysis, risk, bot, tuning, chart
-from app.routers import defi, gmx, gtrade, bybit_futures
+from app.routers import defi, gmx, gtrade, bybit_futures, webhook
 
 setup_logging()
 
@@ -66,10 +66,36 @@ app.include_router(defi.router, prefix=API_PREFIX)
 app.include_router(gmx.router, prefix=API_PREFIX)
 app.include_router(gtrade.router, prefix=API_PREFIX)
 app.include_router(bybit_futures.router, prefix=API_PREFIX)
+app.include_router(webhook.router, prefix=API_PREFIX)
 
 if settings.PROMETHEUS_ENABLED:
     metrics_app = make_asgi_app()
     app.mount("/metrics", metrics_app)
+
+
+@app.on_event("startup")
+async def register_telegram_webhook():
+    if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_WEBHOOK_URL:
+        return
+    import httpx
+    from app.core.logging_config import get_logger
+    _log = get_logger(__name__)
+    params: dict = {"url": settings.TELEGRAM_WEBHOOK_URL}
+    if settings.TELEGRAM_WEBHOOK_SECRET:
+        params["secret_token"] = settings.TELEGRAM_WEBHOOK_SECRET
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/setWebhook",
+                json=params,
+            )
+            data = resp.json()
+            if data.get("ok"):
+                _log.info("telegram_webhook_registered", url=settings.TELEGRAM_WEBHOOK_URL)
+            else:
+                _log.warning("telegram_webhook_register_failed", result=data)
+    except Exception as exc:
+        _log.warning("telegram_webhook_setup_error", error=str(exc))
 
 
 @app.get("/health")
