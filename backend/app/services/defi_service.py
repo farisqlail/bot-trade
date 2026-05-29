@@ -113,6 +113,28 @@ SYMBOL_TO_TOKEN_KEY = {
 
 DEXSCREENER_SEARCH_URL = "https://api.dexscreener.com/latest/dex/search"
 
+UNISWAP_V3_FACTORY = {
+    "arbitrum": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    "optimism": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    "base":     "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+    "polygon":  "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    "ethereum": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+}
+
+FACTORY_ABI = [
+    {
+        "inputs": [
+            {"name": "tokenA", "type": "address"},
+            {"name": "tokenB", "type": "address"},
+            {"name": "fee",    "type": "uint24"},
+        ],
+        "name": "getPool",
+        "outputs": [{"name": "pool", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
 ERC20_ABI = [
     {
         "inputs": [{"name": "account", "type": "address"}],
@@ -298,6 +320,28 @@ class DeFiService:
         logger.info("token_not_found_any_chain", symbol=sym, primary=self.network)
         return None
 
+    async def _detect_fee_tier(self, token_address: str, usdc_address: str) -> int:
+        """Query Uniswap V3 factory to find which fee tier has a pool. Returns 3000 as fallback."""
+        factory_addr = UNISWAP_V3_FACTORY.get(self.network)
+        if not factory_addr:
+            return 3000
+        try:
+            factory = self.w3.eth.contract(
+                address=Web3.to_checksum_address(factory_addr),
+                abi=FACTORY_ABI,
+            )
+            ta = Web3.to_checksum_address(token_address)
+            ua = Web3.to_checksum_address(usdc_address)
+            zero = "0x0000000000000000000000000000000000000000"
+            for fee in (500, 3000, 10000):
+                pool = await factory.functions.getPool(ta, ua, fee).call()
+                if pool != zero:
+                    logger.info("fee_tier_detected", token=token_address, fee=fee, pool=pool, network=self.network)
+                    return fee
+        except Exception as exc:
+            logger.warning("fee_tier_detection_failed", token=token_address, error=str(exc))
+        return 3000
+
     async def _lookup_token_on_network(self, symbol: str, chain_id: str) -> Optional[dict]:
         """Query DexScreener for token on given chain. Any DEX, min $1k liquidity."""
         base = symbol.replace("USDT", "").replace("USDC", "").replace("PERP", "")
@@ -334,7 +378,9 @@ class DeFiService:
             quote = best.get("quoteToken", {}).get("symbol", "")
             liquidity = float((best.get("liquidity") or {}).get("usd") or 0)
             logger.info("dexscreener_token_found", symbol=symbol, chain=chain_id, address=address, dex=dex, quote=quote, liquidity=liquidity)
-            return {"address": address, "fee": 3000}
+            usdc_addr = self.net["usdc"]
+            fee = await self._detect_fee_tier(address, usdc_addr)
+            return {"address": address, "fee": fee}
 
         except Exception as exc:
             logger.warning("dexscreener_lookup_failed", symbol=symbol, chain=chain_id, error=str(exc))
@@ -434,9 +480,8 @@ class DeFiService:
             "nonce": nonce + 1,
             "gasPrice": gas_price,
             "chainId": self.net["chain_id"],
+            "gas": 300000,
         })
-        gas = await self.w3.eth.estimate_gas(swap_tx)
-        swap_tx["gas"] = int(gas * 1.3)
         signed = Account.sign_transaction(swap_tx, private_key)
         swap_hash = await self.w3.eth.send_raw_transaction(signed.raw_transaction)
         tx_hex = swap_hash.hex()
@@ -488,9 +533,8 @@ class DeFiService:
             "nonce": nonce + 1,
             "gasPrice": gas_price,
             "chainId": self.net["chain_id"],
+            "gas": 300000,
         })
-        gas = await self.w3.eth.estimate_gas(swap_tx)
-        swap_tx["gas"] = int(gas * 1.3)
         signed = Account.sign_transaction(swap_tx, private_key)
         swap_hash = await self.w3.eth.send_raw_transaction(signed.raw_transaction)
         tx_hex = swap_hash.hex()

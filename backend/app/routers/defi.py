@@ -187,6 +187,7 @@ async def execute_swap(
                 token_address,
                 req.amount_usdc,
                 slippage=s.defi_slippage / 100,
+                fee=token_meta.get("fee", 3000),
                 wallet_address=s.defi_wallet_address,
             )
         elif req.direction == "sell":
@@ -194,6 +195,7 @@ async def execute_swap(
                 s.defi_wallet_private_key_encrypted,
                 token_address,
                 slippage=s.defi_slippage / 100,
+                fee=token_meta.get("fee", 3000),
                 wallet_address=s.defi_wallet_address,
             )
         else:

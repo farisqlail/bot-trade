@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
 import {
   Plus, RefreshCw, ExternalLink, Pencil, Trash2, X, TrendingUp,
-  Brain, ShieldAlert, Target, Zap, ToggleLeft, ToggleRight,
+  Brain, ShieldAlert, Target, Zap, ToggleLeft, ToggleRight, LineChart,
 } from 'lucide-react'
 import { spotApi, spotWatchlistApi, aiApi, defiApi } from '../services/api'
 
@@ -623,9 +624,105 @@ function TokenDetailModal({ item, onClose, onDone }) {
   )
 }
 
+// ── Manual TP Modal ───────────────────────────────────────────────────────────
+
+function ManualTPModal({ trade, onClose, onDone }) {
+  const [sellPrice, setSellPrice] = useState(trade.price_target ? String(trade.price_target) : '')
+  const [amountOut, setAmountOut] = useState('')
+  const [useDefi, setUseDefi] = useState(false)
+  const [defiSupported, setDefiSupported] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState(null)
+  const [ok, setOk] = useState(false)
+
+  useEffect(() => {
+    defiApi.checkSupport(`${trade.symbol}USDT`)
+      .then(r => setDefiSupported(r.data.supported))
+      .catch(() => setDefiSupported(false))
+  }, [trade.symbol])
+
+  const handleSubmit = async () => {
+    if (!sellPrice) { setErr('Masukkan harga jual'); return }
+    setSubmitting(true)
+    setErr(null)
+    try {
+      const price = Number(sellPrice)
+      const out = amountOut ? Number(amountOut) : null
+      const pnl = out != null ? out - trade.amount_in : null
+      const pnlPct = pnl != null && trade.amount_in > 0 ? (pnl / trade.amount_in) * 100 : null
+
+      if (useDefi && defiSupported) {
+        await defiApi.swap({ symbol: `${trade.symbol}USDT`, direction: 'sell' })
+      }
+
+      await spotApi.updateTrade(trade.id, {
+        status: 'COMPLETED',
+        price_at_trade: price,
+        amount_out: out,
+        pnl: pnl,
+        pnl_percent: pnlPct,
+      })
+      setOk(true)
+      setTimeout(() => { onDone(); onClose() }, 1200)
+    } catch (e) {
+      setErr(e.response?.data?.detail || e.message || 'Gagal')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <ModalBackdrop onClose={onClose}>
+      <h2 className="text-base font-bold text-white mb-1">Manual Take Profit</h2>
+      <p className="text-xs text-zinc-500 mb-4">{trade.symbol} · Entry ${fmt(trade.price_at_trade, 6)} · {fmt(trade.amount_in, 2)} USDC</p>
+      {err && <p className="mb-3 text-sm text-red-400">{err}</p>}
+      {ok && <p className="mb-3 text-sm text-emerald-400">✓ Trade selesai!</p>}
+
+      <div className="space-y-3">
+        <Field label="Harga Jual ($)">
+          <input type="number" step="any" min="0" className={INPUT}
+            value={sellPrice} onChange={e => setSellPrice(e.target.value)} placeholder="Harga saat dijual" />
+        </Field>
+        <Field label="Amount Out (USDC) — opsional">
+          <input type="number" step="any" min="0" className={INPUT}
+            value={amountOut} onChange={e => setAmountOut(e.target.value)} placeholder="Hasil penjualan dalam USDC" />
+        </Field>
+
+        {defiSupported && (
+          <button
+            type="button"
+            onClick={() => setUseDefi(v => !v)}
+            className={clsx(
+              'w-full flex items-center justify-between px-4 py-2.5 rounded-xl border text-sm transition-colors',
+              useDefi
+                ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-300'
+                : 'border-zinc-700 bg-zinc-800/40 text-zinc-400'
+            )}
+          >
+            <span className="flex items-center gap-2"><Zap size={14} /> Eksekusi Sell via DeFi</span>
+            <span className="text-xs opacity-60">{useDefi ? 'Aktif' : 'Nonaktif'}</span>
+          </button>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || ok}
+            className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-bold py-2 rounded-lg transition-colors"
+          >
+            {submitting ? 'Memproses…' : 'Konfirmasi TP'}
+          </button>
+          <button onClick={onClose} className={BTN_GHOST}>Batal</button>
+        </div>
+      </div>
+    </ModalBackdrop>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function SpotTrading() {
+  const navigate = useNavigate()
   const [summary, setSummary] = useState(null)
   const [signals, setSignals] = useState([])
   const [trades, setTrades] = useState([])
@@ -638,6 +735,7 @@ export default function SpotTrading() {
   const [tradeModal, setTradeModal] = useState(null)         // null | '' | symbol string
   const [deleteId, setDeleteId] = useState(null)
   const [tokenDetail, setTokenDetail] = useState(null)       // null | signal item
+  const [tpTrade, setTpTrade] = useState(null)               // null | trade object
 
   const signalTimerRef = useRef(null)
 
@@ -744,6 +842,76 @@ export default function SpotTrading() {
           sub={summary ? `${summary.total_trades} trades` : undefined}
         />
       </div>
+
+      {/* ── Section 1b: Active Spot Trades ── */}
+      {trades.filter(t => t.trade_type === 'BUY' && t.status === 'PENDING').length > 0 && (
+        <div className="rounded-xl border border-emerald-700/30 bg-emerald-900/10 overflow-hidden">
+          <div className="px-4 py-3 border-b border-emerald-700/20">
+            <h2 className="text-sm font-semibold text-emerald-300 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              Active Spot Trades
+            </h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-800 text-left">
+                  {['Symbol', 'Entry', 'Amount', 'Target TP', 'Tanggal', 'TX', 'Aksi'].map(h => (
+                    <th key={h} className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {trades.filter(t => t.trade_type === 'BUY' && t.status === 'PENDING').map(t => (
+                  <tr key={t.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => navigate(`/chart?symbol=${t.symbol}USDT`)}
+                        className="font-semibold text-white hover:text-indigo-300 transition-colors flex items-center gap-1"
+                      >
+                        {t.symbol}
+                        <LineChart size={11} className="opacity-50" />
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-zinc-300">${fmt(t.price_at_trade, 6)}</td>
+                    <td className="px-4 py-3 text-zinc-300">{fmt(t.amount_in, 2)} USDC</td>
+                    <td className="px-4 py-3 text-emerald-400">
+                      {t.price_target ? `$${fmt(t.price_target, 6)}` : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-zinc-500 whitespace-nowrap text-xs">
+                      {t.created_at ? new Date(t.created_at).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }) : '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {t.tx_hash ? (
+                        <a href={`https://arbiscan.io/tx/${t.tx_hash}`} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-indigo-400 hover:text-indigo-300 text-xs">
+                          {t.tx_hash.slice(0, 8)}… <ExternalLink size={10} />
+                        </a>
+                      ) : <span className="text-zinc-600">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => navigate(`/chart?symbol=${t.symbol}USDT`)}
+                          className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-zinc-700/60 border border-zinc-600/40 text-zinc-300 rounded-md hover:bg-zinc-700 transition-colors"
+                        >
+                          <LineChart size={11} /> Chart
+                        </button>
+                        <button
+                          onClick={() => setTpTrade(t)}
+                          className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 rounded-md hover:bg-emerald-500/25 transition-colors"
+                        >
+                          <Target size={11} /> TP
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── Section 2: Watchlist ── */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
@@ -951,6 +1119,14 @@ export default function SpotTrading() {
           item={tokenDetail}
           onClose={() => setTokenDetail(null)}
           onDone={() => { fetchTrades(); fetchSummary(); fetchSignals() }}
+        />
+      )}
+
+      {tpTrade && (
+        <ManualTPModal
+          trade={tpTrade}
+          onClose={() => setTpTrade(null)}
+          onDone={() => { fetchTrades(); fetchSummary() }}
         />
       )}
     </div>
