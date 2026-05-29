@@ -84,6 +84,26 @@ NETWORKS = {
         "usdc_decimals": 6,
         "fee": 500,
     },
+    "ethereum": {
+        "rpc": "https://rpc.ankr.com/eth",
+        "chain_id": 1,
+        "swap_router": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+        "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        "wbtc": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+        "usdc_decimals": 6,
+        "fee": 3000,
+    },
+    "bsc": {
+        "rpc": "https://bsc-rpc.publicnode.com",
+        "chain_id": 56,
+        "swap_router": "0xB971eF87ede563556b2ED4b1C0b0019111Dd85d2",
+        "usdc": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+        "weth": "0x2170Ed0880ac9A755fd29B2688956BD959F933F8",
+        "wbtc": "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",
+        "usdc_decimals": 18,
+        "fee": 2500,
+    },
 }
 
 SYMBOL_TO_TOKEN_KEY = {
@@ -200,7 +220,7 @@ class DeFiService:
         }
 
     async def get_token_address(self, symbol: str) -> Optional[str]:
-        meta = await self.get_token_metadata(symbol)
+        meta = await self.get_token_metadata(symbol, strict_network=True)
         return meta["address"] if meta else None
 
     def get_token_fee(self, symbol: str) -> int:
@@ -218,50 +238,84 @@ class DeFiService:
         "optimism": "optimism",
         "base":     "base",
         "polygon":  "polygon",
+        "ethereum": "ethereum",
+        "bsc":      "bsc",
     }
 
-    async def get_token_metadata(self, symbol: str) -> Optional[dict]:
-        """Returns {address, fee} for a token on this network. Checks static map first, then DexScreener."""
+    # Fallback search order: low-gas chains first, Ethereum last
+    _FALLBACK_CHAINS = ["arbitrum", "base", "bsc", "optimism", "polygon", "ethereum"]
+
+    async def get_token_metadata(self, symbol: str, strict_network: bool = False) -> Optional[dict]:
+        """Returns {address, fee, network} for a token.
+        strict_network=True: only look up on self.network (no cross-chain fallback) — use for actual swaps.
+        strict_network=False: fallback to other chains — use for availability checks only.
+        """
         sym = symbol.upper()
 
         if self.network == "arbitrum" and sym in ARBITRUM_KNOWN_TOKENS:
-            return ARBITRUM_KNOWN_TOKENS[sym]
+            return {**ARBITRUM_KNOWN_TOKENS[sym], "network": "arbitrum"}
 
-        cache_key = f"{self.network}:{sym}"
-        if cache_key in _dexscreener_cache:
-            return _dexscreener_cache[cache_key]
+        # Separate cache keys for strict vs check to avoid cross-contamination
+        strict_key = f"strict:{self.network}:{sym}"
+        check_key = f"check:{self.network}:{sym}"
 
-        # Try DexScreener for all supported networks
-        chain_id = self._DEXSCREENER_CHAIN.get(self.network)
-        if chain_id:
-            result = await self._lookup_token_on_network(sym, chain_id)
-            _dexscreener_cache[cache_key] = result
-            return result
+        if strict_network and strict_key in _dexscreener_cache:
+            return _dexscreener_cache[strict_key]
 
-        # Legacy fallback for unknown networks
-        token_key = SYMBOL_TO_TOKEN_KEY.get(sym)
-        if not token_key:
+        if not strict_network and check_key in _dexscreener_cache:
+            return _dexscreener_cache[check_key]
+
+        # Try primary network
+        primary_chain_id = self._DEXSCREENER_CHAIN.get(self.network)
+        if primary_chain_id:
+            result = await self._lookup_token_on_network(sym, primary_chain_id)
+            if result:
+                result["network"] = self.network
+                _dexscreener_cache[strict_key] = result
+                _dexscreener_cache[check_key] = result
+                logger.info("token_found_on_chain", symbol=sym, network=self.network, address=result["address"])
+                return result
+
+        if strict_network:
+            _dexscreener_cache[strict_key] = None
+            logger.info("token_not_found_strict", symbol=sym, network=self.network)
             return None
-        addr = self.net.get(token_key)
-        return {"address": addr, "fee": self.net["fee"]} if addr else None
+
+        # Fallback: other chains (only for /check endpoint, not for swaps)
+        fallback_chains = [c for c in self._FALLBACK_CHAINS if c != self.network]
+        for network_name in fallback_chains:
+            chain_id = self._DEXSCREENER_CHAIN.get(network_name)
+            if not chain_id:
+                continue
+            result = await self._lookup_token_on_network(sym, chain_id)
+            if result:
+                result["network"] = network_name
+                _dexscreener_cache[check_key] = result
+                logger.info("token_found_fallback_chain", symbol=sym, primary=self.network, found_on=network_name, address=result["address"])
+                return result
+
+        _dexscreener_cache[check_key] = None
+        logger.info("token_not_found_any_chain", symbol=sym, primary=self.network)
+        return None
 
     async def _lookup_token_on_network(self, symbol: str, chain_id: str) -> Optional[dict]:
-        """Query DexScreener for token on given chain, Uniswap V3, USDC pair, >$50k liquidity."""
-        base = symbol.replace("USDT", "").replace("USDC", "")
+        """Query DexScreener for token on given chain. Any DEX, min $1k liquidity."""
+        base = symbol.replace("USDT", "").replace("USDC", "").replace("PERP", "")
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(DEXSCREENER_SEARCH_URL, params={"q": base})
                 if resp.status_code != 200:
                     return None
                 pairs = resp.json().get("pairs") or []
 
+            _QUOTE_PRIORITY = {"USDC": 0, "USDC.E": 1, "USDT": 2, "WETH": 3, "WBNB": 4, "ETH": 5}
+
             candidates = [
                 p for p in pairs
                 if p.get("chainId") == chain_id
-                and p.get("dexId") == "uniswap-v3"
                 and p.get("baseToken", {}).get("symbol", "").upper() == base.upper()
-                and p.get("quoteToken", {}).get("symbol", "").upper() in ("USDC", "USDC.E")
-                and float((p.get("liquidity") or {}).get("usd") or 0) > 50_000
+                and p.get("quoteToken", {}).get("symbol", "").upper() in _QUOTE_PRIORITY
+                and float((p.get("liquidity") or {}).get("usd") or 0) > 1_000
             ]
 
             if not candidates:
@@ -269,12 +323,17 @@ class DeFiService:
                 return None
 
             candidates.sort(
-                key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0),
-                reverse=True,
+                key=lambda p: (
+                    _QUOTE_PRIORITY.get(p.get("quoteToken", {}).get("symbol", "").upper(), 99),
+                    -float((p.get("liquidity") or {}).get("usd") or 0),
+                ),
             )
             best = candidates[0]
             address = best["baseToken"]["address"]
-            logger.info("dexscreener_token_found", symbol=symbol, chain=chain_id, address=address)
+            dex = best.get("dexId", "unknown")
+            quote = best.get("quoteToken", {}).get("symbol", "")
+            liquidity = float((best.get("liquidity") or {}).get("usd") or 0)
+            logger.info("dexscreener_token_found", symbol=symbol, chain=chain_id, address=address, dex=dex, quote=quote, liquidity=liquidity)
             return {"address": address, "fee": 3000}
 
         except Exception as exc:
@@ -310,7 +369,11 @@ class DeFiService:
         tx["gas"] = int(gas * 1.3)
         signed = Account.sign_transaction(tx, private_key)
         tx_hash = await self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        await self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+        # Brief wait for approve only — swap nonce depends on it being mined
+        try:
+            await self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=45)
+        except Exception:
+            pass  # proceed with swap even if receipt times out
         return tx_hash
 
     async def swap_usdc_to_token(
@@ -321,10 +384,11 @@ class DeFiService:
         slippage: float = 0.005,
         fee: int = 3000,
         usdc_address: str | None = None,
+        wallet_address: str | None = None,
     ) -> dict:
         private_key = decrypt_private_key(private_key_encrypted)
-        account = Account.from_key(private_key)
-        wallet_addr = account.address
+        # Use explicitly-provided wallet address (from settings) — avoids mismatch if key was imported differently
+        wallet_addr = Web3.to_checksum_address(wallet_address) if wallet_address else Account.from_key(private_key).address
 
         usdc_addr = Web3.to_checksum_address(usdc_address or self.net["usdc"])
         token_addr = Web3.to_checksum_address(token_address)
@@ -333,10 +397,11 @@ class DeFiService:
         # Pre-flight: verify ETH balance for gas
         eth_wei = await self.w3.eth.get_balance(Web3.to_checksum_address(wallet_addr))
         eth_balance = eth_wei / 1e18
+        gas_token = "BNB" if self.network == "bsc" else "MATIC" if self.network == "polygon" else "ETH"
         if eth_balance < 0.0001:
             raise ValueError(
-                f"Wallet {wallet_addr} has only {eth_balance:.6f} ETH — insufficient for gas. "
-                "Make sure the private key matches your MetaMask wallet that holds ETH."
+                f"Insufficient gas on {self.network}: wallet {wallet_addr} has {eth_balance:.6f} {gas_token}. "
+                f"Add {gas_token} to your wallet on {self.network} to pay for gas fees."
             )
 
         # Pre-flight: verify USDC balance
@@ -374,15 +439,14 @@ class DeFiService:
         swap_tx["gas"] = int(gas * 1.3)
         signed = Account.sign_transaction(swap_tx, private_key)
         swap_hash = await self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = await self.w3.eth.wait_for_transaction_receipt(swap_hash, timeout=120)
-
-        logger.info("defi_swap_buy", tx=swap_hash.hex(), amount_usdc=amount_usdc, status=receipt.status)
+        tx_hex = swap_hash.hex()
+        logger.info("defi_swap_buy_submitted", tx=tx_hex, amount_usdc=amount_usdc, network=self.network)
+        # Return immediately after broadcast — don't block waiting for confirmation
         return {
             "direction": "buy",
-            "status": "success" if receipt.status == 1 else "failed",
-            "tx_hash": swap_hash.hex(),
+            "status": "submitted",
+            "tx_hash": tx_hex,
             "amount_usdc": amount_usdc,
-            "gas_used": receipt.gasUsed,
             "network": self.network,
         }
 
@@ -392,10 +456,10 @@ class DeFiService:
         token_address: str,
         slippage: float = 0.005,
         fee: int = 3000,
+        wallet_address: str | None = None,
     ) -> dict:
         private_key = decrypt_private_key(private_key_encrypted)
-        account = Account.from_key(private_key)
-        wallet_addr = account.address
+        wallet_addr = Web3.to_checksum_address(wallet_address) if wallet_address else Account.from_key(private_key).address
 
         token_addr = Web3.to_checksum_address(token_address)
         usdc_addr = Web3.to_checksum_address(self.net["usdc"])
@@ -429,14 +493,13 @@ class DeFiService:
         swap_tx["gas"] = int(gas * 1.3)
         signed = Account.sign_transaction(swap_tx, private_key)
         swap_hash = await self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = await self.w3.eth.wait_for_transaction_receipt(swap_hash, timeout=120)
-
-        logger.info("defi_swap_sell", tx=swap_hash.hex(), token_balance=token_balance, status=receipt.status)
+        tx_hex = swap_hash.hex()
+        logger.info("defi_swap_sell_submitted", tx=tx_hex, token_balance=token_balance, network=self.network)
+        # Return immediately after broadcast — don't block waiting for confirmation
         return {
             "direction": "sell",
-            "status": "success" if receipt.status == 1 else "failed",
-            "tx_hash": swap_hash.hex(),
+            "status": "submitted",
+            "tx_hash": tx_hex,
             "token_amount_raw": token_balance,
-            "gas_used": receipt.gasUsed,
             "network": self.network,
         }

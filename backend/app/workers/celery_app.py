@@ -47,5 +47,9 @@ celery_app.conf.update(
             "task": "app.workers.tasks.monitor_gmx_positions",
             "schedule": 60.0,  # check GMX futures positions, stop-loss on price drop
         },
+        "check-spot-price-alerts": {
+            "task": "app.workers.tasks.check_spot_price_alerts",
+            "schedule": 600.0,  # every 10 minutes
+        },
     },
 )

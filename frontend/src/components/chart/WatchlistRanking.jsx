@@ -1,9 +1,12 @@
+import { Zap } from 'lucide-react'
 import clsx from 'clsx'
 
 const SIGNAL_COLOR = {
-  BUY: 'text-emerald-400',
-  SELL: 'text-red-400',
-  HOLD: 'text-amber-400',
+  BUY:          'text-emerald-400',
+  STRONG_BUY:   'text-emerald-300',
+  SELL:         'text-red-400',
+  STRONG_SELL:  'text-red-300',
+  HOLD:         'text-amber-400',
 }
 
 function formatPrice(price) {
@@ -42,6 +45,9 @@ export default function WatchlistRanking({ items = [], selectedSymbol, onSelect 
               <span className="text-sm font-bold text-zinc-100 leading-none">
                 {item.symbol.replace('USDT', '')}
               </span>
+              {item.dex_available && (
+                <Zap size={9} className="text-indigo-400 shrink-0" title={`DEX: ${item.dex_network}`} />
+              )}
             </div>
             {item.signal && (
               <span className={clsx('text-[10px] font-bold', SIGNAL_COLOR[item.signal] || 'text-zinc-500')}>

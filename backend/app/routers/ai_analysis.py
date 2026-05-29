@@ -244,6 +244,9 @@ async def scan_altcoins(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
+    import asyncio
+    from app.services.defi_service import DeFiService, ARBITRUM_KNOWN_TOKENS
+
     exchange = ExchangeService()
     try:
         all_tickers = await exchange.get_all_tickers(min_turnover_usd=min_volume_usd)
@@ -251,6 +254,22 @@ async def scan_altcoins(
         raise HTTPException(status_code=503, detail=f"Bybit fetch failed: {str(e)}")
 
     altcoins = [t for t in all_tickers if t["symbol"] not in _LARGE_CAPS]
+
+    # DeFi-only scan: filter to tokens on user's configured network
+    # Uses static registry + in-memory cache ONLY — no live DexScreener calls (avoids timeout)
+    s_row = (await db.execute(select(Settings).where(Settings.user_id == user_id))).scalar_one_or_none()
+    if s_row and s_row.defi_enabled and s_row.defi_only_scan:
+        defi_net = s_row.defi_network or "arbitrum"
+        from app.services.defi_service import _dexscreener_cache
+
+        def _in_static_or_cache(sym: str) -> bool:
+            if defi_net == "arbitrum" and sym in ARBITRUM_KNOWN_TOKENS:
+                return True
+            # Accept only already-cached positive results — no new API calls during scan
+            cached = _dexscreener_cache.get(f"strict:{defi_net}:{sym}")
+            return bool(cached)
+
+        altcoins = [t for t in altcoins if _in_static_or_cache(t["symbol"])]
 
     results = []
     for t in altcoins:
@@ -313,6 +332,35 @@ async def scan_altcoins(
         )
     try:
         await db.commit()
+    except Exception:
+        await db.rollback()
+
+    # Auto-add BUY/STRONG_BUY coins to spot_watchlist (upsert by symbol)
+    try:
+        from app.models.spot_watchlist import SpotWatchlist
+        buy_results = [r for r in top_results if r["recommended_action"] in {"BUY", "STRONG_BUY"}]
+        if buy_results:
+            base_symbols = [r["symbol"].replace("USDT", "") for r in buy_results]
+            existing_r = await db.execute(
+                select(SpotWatchlist.symbol).where(
+                    SpotWatchlist.user_id == user_id,
+                    SpotWatchlist.symbol.in_(base_symbols),
+                )
+            )
+            existing_symbols = {row[0] for row in existing_r.fetchall()}
+            for r, sym in zip(buy_results, base_symbols):
+                if sym not in existing_symbols:
+                    price = float(r.get("price") or 0.0)
+                    db.add(SpotWatchlist(
+                        user_id=user_id,
+                        symbol=sym,
+                        network="arbitrum",
+                        alert_enabled=True,
+                        target_buy_price=round(price, 8) if price > 0 else None,
+                        target_sell_price=round(price * 1.05, 8) if price > 0 else None,
+                        notes=f"Auto: {r['recommended_action']} {r.get('change_24h', 0):+.2f}% 24h",
+                    ))
+            await db.commit()
     except Exception:
         await db.rollback()
 

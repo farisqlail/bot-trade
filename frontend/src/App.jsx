@@ -10,6 +10,7 @@ import TradingChart from './pages/TradingChart'
 import FuturesTrade from './pages/FuturesTrade'
 import GTradeFutures from './pages/GTradeFutures'
 import AltcoinScanner from './pages/AltcoinScanner'
+import SpotTrading from './pages/SpotTrading'
 import Login from './pages/Login'
 import Register from './pages/Register'
 
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="futures" element={<FuturesTrade />} />
           <Route path="gtrade" element={<GTradeFutures />} />
           <Route path="altcoins" element={<AltcoinScanner />} />
+          <Route path="spot" element={<SpotTrading />} />
         </Route>
       </Routes>
     </BrowserRouter>

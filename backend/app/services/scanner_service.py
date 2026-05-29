@@ -486,17 +486,36 @@ class ScannerService:
         # Deduplicate preserving order
         watchlist = list(dict.fromkeys(watchlist))
 
-        # DeFi-only scan: restrict to coins with known Arbitrum ERC-20 addresses
+        # DeFi-only scan: restrict to coins available on user's configured DeFi network
         if settings and settings.defi_enabled and settings.defi_only_scan:
-            from app.services.defi_service import ARBITRUM_KNOWN_TOKENS
-            arbitrum_symbols = set(ARBITRUM_KNOWN_TOKENS.keys())
+            from app.services.defi_service import DeFiService, ARBITRUM_KNOWN_TOKENS
+            defi_net = settings.defi_network or "arbitrum"
             before_count = len(watchlist)
-            filtered = [s for s in watchlist if s in arbitrum_symbols]
+
+            dex_sem = asyncio.Semaphore(5)
+
+            async def _has_dex(sym: str) -> bool:
+                # Instant static check for Arbitrum
+                if defi_net == "arbitrum" and sym in ARBITRUM_KNOWN_TOKENS:
+                    return True
+                async with dex_sem:
+                    try:
+                        svc = DeFiService(network=defi_net)
+                        meta = await asyncio.wait_for(
+                            svc.get_token_metadata(sym, strict_network=True),
+                            timeout=8.0,
+                        )
+                        return bool(meta)
+                    except Exception:
+                        return False
+
+            check_results = await asyncio.gather(*[_has_dex(s) for s in watchlist])
+            filtered = [s for s, ok in zip(watchlist, check_results) if ok]
             if filtered:
                 watchlist = filtered
-                logger.info("scanner_defi_only_filter", before=before_count, after=len(filtered))
+                logger.info("scanner_defi_only_filter", network=defi_net, before=before_count, after=len(filtered))
             else:
-                logger.warning("scanner_defi_only_filter_empty_fallback", watchlist_size=before_count)
+                logger.warning("scanner_defi_only_filter_empty_fallback", network=defi_net, watchlist_size=before_count)
 
         fetch_sem = asyncio.Semaphore(3)
 

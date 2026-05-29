@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
@@ -14,7 +15,9 @@ from app.core.logging_config import get_logger
 from app.core.security import get_current_user_id
 from app.database import AsyncSessionLocal, get_db
 from app.models.ai_analysis import AIAnalysis
+from app.models.settings import Settings
 from app.models.trade import Trade, TradeStatus
+from app.services.defi_service import DeFiService, ARBITRUM_KNOWN_TOKENS, _dexscreener_cache
 from app.services.exchange_service import ExchangeService
 
 logger = get_logger(__name__)
@@ -89,6 +92,8 @@ class WatchlistItem(BaseModel):
     signal: Optional[str] = None
     confidence: Optional[float] = None
     score: float
+    dex_available: bool = False
+    dex_network: Optional[str] = None
 
 
 class ChartBundle(BaseModel):
@@ -227,24 +232,56 @@ async def get_watchlist_ranking(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        subq = (
-            select(AIAnalysis.symbol, func.max(AIAnalysis.created_at).label("max_ts"))
-            .group_by(AIAnalysis.symbol)
-            .subquery()
-        )
-        analyses = (
-            await db.execute(
-                select(AIAnalysis)
-                .join(subq, (AIAnalysis.symbol == subq.c.symbol) & (AIAnalysis.created_at == subq.c.max_ts))
-                .order_by(desc(AIAnalysis.confidence))
-                .limit(limit * 2)
+        # Use 2h window first (reflects latest scan session); fall back to 24h if empty
+        for hours in (2, 24):
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+            subq = (
+                select(AIAnalysis.symbol, func.max(AIAnalysis.created_at).label("max_ts"))
+                .where(AIAnalysis.created_at >= cutoff)
+                .group_by(AIAnalysis.symbol)
+                .subquery()
             )
-        ).scalars().all()
+            analyses = (
+                await db.execute(
+                    select(AIAnalysis)
+                    .join(subq, (AIAnalysis.symbol == subq.c.symbol) & (AIAnalysis.created_at == subq.c.max_ts))
+                    .order_by(desc(AIAnalysis.confidence))
+                    .limit(limit * 2)
+                )
+            ).scalars().all()
+            if analyses:
+                break
     except Exception as exc:
         logger.warning("watchlist_ranking_db_error", error=str(exc))
         return []
 
+    # Load user's configured DeFi network for DEX availability check
+    s_row = (await db.execute(select(Settings).where(Settings.user_id == user_id))).scalar_one_or_none()
+    defi_network = (s_row.defi_network if s_row else None) or "arbitrum"
+    defi_enabled = s_row.defi_enabled if s_row else False
+
     exchange = ExchangeService()
+
+    async def _check_dex(symbol: str) -> tuple[bool, str | None]:
+        """Fast static check first (Arbitrum known tokens), then cached DexScreener."""
+        if not defi_enabled:
+            return False, None
+        sym = symbol.upper()
+        # Instant check: Arbitrum static registry
+        if defi_network == "arbitrum" and sym in ARBITRUM_KNOWN_TOKENS:
+            return True, "arbitrum"
+        # Cache check (no API call if uncached — SpotTradePanel handles full check on click)
+        strict_key = f"strict:{defi_network}:{sym}"
+        cached = _dexscreener_cache.get(strict_key, "MISS")
+        if cached != "MISS":
+            return (bool(cached), cached.get("network") if cached else None)
+        # Fallback: quick DexScreener lookup (result cached for next request)
+        try:
+            svc = DeFiService(network=defi_network)
+            meta = await svc.get_token_metadata(sym, strict_network=True)
+            return (bool(meta), meta.get("network") if meta else None)
+        except Exception:
+            return False, None
 
     async def _get_item(a) -> WatchlistItem:
         price = change = 0.0
@@ -254,6 +291,7 @@ async def get_watchlist_ranking(
         except Exception:
             pass
         score = float(a.confidence or 0) * (1.0 + abs(change) / 100.0)
+        dex_ok, dex_net = await _check_dex(a.symbol)
         return WatchlistItem(
             symbol=a.symbol,
             price=price,
@@ -261,10 +299,17 @@ async def get_watchlist_ranking(
             signal=a.recommended_action,
             confidence=a.confidence,
             score=score,
+            dex_available=dex_ok,
+            dex_network=dex_net,
         )
 
     items = await asyncio.gather(*[_get_item(a) for a in analyses])
     items = sorted(items, key=lambda x: x.score, reverse=True)
+
+    # DeFi-only: drop coins not on user's configured network
+    if s_row and s_row.defi_enabled and s_row.defi_only_scan:
+        items = [i for i in items if i.dex_available]
+
     return items[:limit]
 
 

@@ -44,6 +44,10 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
             "/buygmx ETHUSDT — Open GMX LONG futures position\n"
             "/sellgmx ETHUSDT — Open GMX SHORT futures position\n"
             "/gmxpositions — View open GMX positions\n"
+            "\n<b>Spot Trading</b>\n"
+            "/spot_portfolio — Ringkasan portfolio spot (invested, value, PnL)\n"
+            "/spot_prices — Harga live semua token di spot watchlist\n"
+            "/spot_signals — Sinyal BUY/WATCH dari spot watchlist\n"
             "/help — Show this message"
         )
 
@@ -483,6 +487,104 @@ async def _handle_command(cmd: str, db: AsyncSession) -> str:
             except Exception as exc:
                 results.append(f"⚠️ GMX positions error: <code>{exc}</code>")
         return "\n\n".join(results) if results else "No GMX-enabled users found."
+
+    elif cmd == "/spot_portfolio":
+        from app.models.spot_trade import SpotTrade, SpotTradeStatus
+        lines = []
+        for s in all_settings:
+            trades_r = await db.execute(
+                select(SpotTrade).where(SpotTrade.user_id == s.user_id)
+            )
+            trades = trades_r.scalars().all()
+
+            total_invested = sum(t.amount_in for t in trades)
+            completed = [t for t in trades if t.status == SpotTradeStatus.COMPLETED and t.pnl is not None]
+            total_pnl = sum(t.pnl for t in completed)
+            current_value = total_invested + total_pnl
+            pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
+            open_count = len([t for t in trades if t.status != SpotTradeStatus.COMPLETED and t.status != SpotTradeStatus.FAILED])
+            pnl_sign = "+" if total_pnl >= 0 else ""
+
+            lines.append(
+                f"📦 <b>Spot Portfolio</b>\n"
+                f"Total Invested: <code>${total_invested:,.2f}</code>\n"
+                f"Current Value: <code>${current_value:,.2f}</code>\n"
+                f"PnL: <code>{pnl_sign}${total_pnl:,.2f} ({pnl_sign}{pnl_pct:.1f}%)</code>\n"
+                f"Open Positions: {open_count} token"
+            )
+        return "\n\n".join(lines) if lines else "Belum ada data spot trade."
+
+    elif cmd == "/spot_prices":
+        from app.models.spot_watchlist import SpotWatchlist
+        from app.services.spot_market_service import SpotMarketService
+
+        watchlist_r = await db.execute(
+            select(SpotWatchlist).where(SpotWatchlist.alert_enabled == True)
+        )
+        items = watchlist_r.scalars().all()
+        if not items:
+            return "📊 Spot watchlist kosong."
+
+        symbols = list(dict.fromkeys(item.symbol for item in items))
+        svc = SpotMarketService()
+        prices = await svc.get_multiple_prices(symbols)
+        price_map = {p["symbol"]: p for p in prices}
+
+        price_lines = []
+        for sym in symbols:
+            pd = price_map.get(sym)
+            if not pd:
+                price_lines.append(f"• <code>{sym}</code>: —")
+                continue
+            change = pd.get("change_24h", 0.0)
+            analysis = svc.analyze_spot_signal(sym, pd)
+            signal = analysis["signal"]
+            change_str = f"{'+' if change >= 0 else ''}{change:.1f}%"
+            price_lines.append(
+                f"• <code>{sym}</code>: <code>${pd['price']:,.4g}</code> ({change_str}) — {signal}"
+            )
+
+        return "📊 <b>Spot Watchlist Prices</b>\n" + "\n".join(price_lines)
+
+    elif cmd == "/spot_signals":
+        from app.models.spot_watchlist import SpotWatchlist
+        from app.services.spot_market_service import SpotMarketService
+
+        watchlist_r = await db.execute(
+            select(SpotWatchlist).where(SpotWatchlist.alert_enabled == True)
+        )
+        items = watchlist_r.scalars().all()
+        if not items:
+            return "🔎 Spot watchlist kosong."
+
+        symbols = list(dict.fromkeys(item.symbol for item in items))
+        svc = SpotMarketService()
+        prices = await svc.get_multiple_prices(symbols)
+        price_map = {p["symbol"]: p for p in prices}
+
+        signal_lines = []
+        for item in items:
+            pd = price_map.get(item.symbol)
+            if not pd:
+                continue
+            analysis = svc.analyze_spot_signal(item.symbol, pd)
+            signal = analysis["signal"]
+            if signal not in ("BUY", "WATCH"):
+                continue
+            change = pd.get("change_24h", 0.0)
+            price = pd["price"]
+            emoji = "🟢" if signal == "BUY" else "🟡"
+            target_note = ""
+            if signal == "WATCH" and item.target_buy_price:
+                target_note = f", mendekati target beli ${item.target_buy_price:,.4g}"
+            signal_lines.append(
+                f"{emoji} <code>{item.symbol}</code> — {signal} "
+                f"(turun {abs(change):.1f}% dalam 24 jam, harga <code>${price:,.4g}</code>{target_note})"
+            )
+
+        if not signal_lines:
+            return "🔎 Tidak ada sinyal spot menarik saat ini."
+        return "🔎 <b>Spot Signals</b>\n" + "\n".join(signal_lines)
 
     return f"❓ Unknown command: <code>{cmd}</code>. Use /help."
 

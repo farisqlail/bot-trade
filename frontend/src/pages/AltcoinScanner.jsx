@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
-import { RefreshCw, TrendingUp, TrendingDown, Minus, AlertCircle } from 'lucide-react'
-import { aiApi } from '../services/api'
+import { RefreshCw, TrendingUp, TrendingDown, Minus, AlertCircle, BookmarkPlus, BookmarkCheck } from 'lucide-react'
+import { aiApi, spotWatchlistApi } from '../services/api'
+
+const toSpotSymbol = (s) => s.replace(/USDT$/, '')
 
 const ACTION_CONFIG = {
   STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-300 bg-emerald-500/15 border-emerald-500/30' },
@@ -31,7 +33,27 @@ export default function AltcoinScanner() {
   const [lastRun, setLastRun] = useState(null)
   const [minVolume, setMinVolume] = useState(500000)
   const [limit, setLimit] = useState(30)
+  const [watchlistSet, setWatchlistSet] = useState(new Set())
+  const [addingSet, setAddingSet] = useState(new Set())
   const navigate = useNavigate()
+
+  useEffect(() => {
+    spotWatchlistApi.getAll()
+      .then(res => setWatchlistSet(new Set(res.data.map(i => i.symbol))))
+      .catch(() => {})
+  }, [])
+
+  const addToSpotWatchlist = async (e, coin) => {
+    e.stopPropagation()
+    const sym = toSpotSymbol(coin.symbol)
+    if (watchlistSet.has(sym)) return
+    setAddingSet(prev => new Set(prev).add(sym))
+    try {
+      await spotWatchlistApi.create({ symbol: sym })
+      setWatchlistSet(prev => new Set(prev).add(sym))
+    } catch { /* ignore */ }
+    finally { setAddingSet(prev => { const s = new Set(prev); s.delete(sym); return s }) }
+  }
 
   const fetchAltcoins = useCallback(async () => {
     setLoading(true)
@@ -163,6 +185,7 @@ export default function AltcoinScanner() {
                 <th className="px-4 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">24h %</th>
                 <th className="px-4 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">Volume 24h</th>
                 <th className="px-4 py-3 text-center text-xs text-gray-500 font-medium uppercase tracking-wider">Signal</th>
+                <th className="px-4 py-3 text-center text-xs text-gray-500 font-medium uppercase tracking-wider">Spot</th>
               </tr>
             </thead>
             <tbody>
@@ -203,6 +226,28 @@ export default function AltcoinScanner() {
                       )}>
                         {cfg.label}
                       </span>
+                    </td>
+                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                      {(() => {
+                        const sym = toSpotSymbol(coin.symbol)
+                        const added = watchlistSet.has(sym)
+                        const loading = addingSet.has(sym)
+                        return (
+                          <button
+                            onClick={(e) => addToSpotWatchlist(e, coin)}
+                            disabled={added || loading}
+                            title={added ? 'Di watchlist' : 'Tambah ke Spot Watchlist'}
+                            className={clsx(
+                              'p-1.5 rounded-lg transition-colors',
+                              added
+                                ? 'text-emerald-400 cursor-default'
+                                : 'text-zinc-500 hover:text-indigo-300 hover:bg-indigo-500/10'
+                            )}
+                          >
+                            {added ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
+                          </button>
+                        )
+                      })()}
                     </td>
                   </tr>
                 )

@@ -540,6 +540,118 @@ def monitor_defi_positions(self):
         logger.error("monitor_defi_positions_error", error=str(exc))
 
 
+@celery_app.task(name="app.workers.tasks.check_spot_price_alerts", bind=True)
+def check_spot_price_alerts(self):
+    async def _run():
+        import redis.asyncio as aioredis
+        from sqlalchemy import select
+        from app.database import AsyncSessionLocal
+        from app.models.spot_watchlist import SpotWatchlist
+        from app.models.spot_trade import SpotTrade, SpotTradeStatus
+        from app.services.spot_market_service import SpotMarketService
+        from app.services.telegram_service import TelegramService
+        from app.config import settings
+
+        redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        tg = TelegramService()
+        spot_svc = SpotMarketService()
+
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(SpotWatchlist).where(SpotWatchlist.alert_enabled == True)
+                )
+                watchlist_items = result.scalars().all()
+
+                if not watchlist_items:
+                    return
+
+                # Group by user, collect unique symbols
+                user_symbols: dict[int, list[str]] = {}
+                for item in watchlist_items:
+                    user_symbols.setdefault(item.user_id, [])
+                    if item.symbol not in user_symbols[item.user_id]:
+                        user_symbols[item.user_id].append(item.symbol)
+
+                all_symbols = list({s for syms in user_symbols.values() for s in syms})
+                prices = await spot_svc.get_multiple_prices(all_symbols)
+                price_map = {p["symbol"]: p for p in prices}
+
+                for item in watchlist_items:
+                    price_data = price_map.get(item.symbol)
+                    if not price_data:
+                        continue
+
+                    current_price = price_data["price"]
+                    if not current_price:
+                        continue
+
+                    try:
+                        # --- a. Buy alert ---
+                        if item.target_buy_price and item.target_buy_price > 0:
+                            threshold = item.target_buy_price * 1.02
+                            if current_price <= threshold:
+                                alert_key = f"spot_alert:buy:{item.user_id}:{item.symbol}"
+                                if not await redis_client.get(alert_key):
+                                    await tg.send_message(
+                                        f"🟢 <b>BUY ALERT</b>: <code>{item.symbol}</code> sekarang "
+                                        f"<code>${current_price:,.6g}</code>, mendekati target beli kamu "
+                                        f"<code>${item.target_buy_price:,.6g}</code>"
+                                    )
+                                    await redis_client.setex(alert_key, 86400, "1")
+
+                        # --- b. Sell alert (only if user has COMPLETED trade for this symbol) ---
+                        if item.target_sell_price and item.target_sell_price > 0:
+                            trade_result = await db.execute(
+                                select(SpotTrade).where(
+                                    SpotTrade.user_id == item.user_id,
+                                    SpotTrade.symbol == item.symbol,
+                                    SpotTrade.status == SpotTradeStatus.COMPLETED,
+                                ).limit(1)
+                            )
+                            has_completed_trade = trade_result.scalar_one_or_none() is not None
+                            if has_completed_trade:
+                                threshold = item.target_sell_price * 0.98
+                                if current_price >= threshold:
+                                    alert_key = f"spot_alert:sell:{item.user_id}:{item.symbol}"
+                                    if not await redis_client.get(alert_key):
+                                        await tg.send_message(
+                                            f"🔴 <b>SELL ALERT</b>: <code>{item.symbol}</code> sekarang "
+                                            f"<code>${current_price:,.6g}</code>, mendekati target jual kamu "
+                                            f"<code>${item.target_sell_price:,.6g}</code>"
+                                        )
+                                        await redis_client.setex(alert_key, 86400, "1")
+
+                        # --- c. Heuristic signal alert (BUY only, once per 24h) ---
+                        signal_key = f"spot_alert:signal:{item.user_id}:{item.symbol}"
+                        if not await redis_client.get(signal_key):
+                            analysis = spot_svc.analyze_spot_signal(item.symbol, price_data)
+                            if analysis["signal"] == "BUY":
+                                change = price_data.get("change_24h", 0.0)
+                                await tg.send_message(
+                                    f"📊 <b>SPOT SIGNAL</b>: <code>{item.symbol}</code> turun "
+                                    f"<code>{abs(change):.1f}%</code>, potensi entry menarik di "
+                                    f"<code>${current_price:,.6g}</code>"
+                                )
+                                await redis_client.setex(signal_key, 86400, "1")
+
+                    except Exception as exc:
+                        logger.warning(
+                            "spot_alert_item_error",
+                            symbol=item.symbol,
+                            user_id=item.user_id,
+                            error=str(exc),
+                        )
+
+        finally:
+            await redis_client.aclose()
+
+    try:
+        run_async(_run())
+    except Exception as exc:
+        logger.error("check_spot_price_alerts_error", error=str(exc))
+
+
 @celery_app.task(name="app.workers.tasks.monitor_gmx_positions", bind=True)
 def monitor_gmx_positions(self):
     async def _run():

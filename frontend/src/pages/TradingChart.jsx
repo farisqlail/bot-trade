@@ -6,6 +6,7 @@ import SmartChart from '../components/chart/SmartChart'
 import AIAnalysisPanel from '../components/chart/AIAnalysisPanel'
 import WatchlistRanking from '../components/chart/WatchlistRanking'
 import ActiveTradeOverlay from '../components/chart/ActiveTradeOverlay'
+import SpotTradePanel from '../components/chart/SpotTradePanel'
 import { useChartData } from '../hooks/useChartData'
 
 const TIMEFRAMES = [
@@ -156,13 +157,14 @@ export default function TradingChart() {
         )}
       </section>
 
-      {/* ── Right: AI Analysis ────────────────────── */}
-      <aside className="w-60 shrink-0 flex flex-col border-l border-zinc-800/60">
+      {/* ── Right: AI Analysis + Spot Trade ──────── */}
+      <aside className="w-64 shrink-0 flex flex-col border-l border-zinc-800/60">
         <div className="px-4 pt-3 pb-2 border-b border-zinc-800/60">
           <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold">AI Analysis</p>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-800">
           <AIAnalysisPanel signal={bundle?.signal} />
+          <SpotTradePanel symbol={symbol} signal={bundle?.signal} price={price} />
         </div>
       </aside>
     </div>

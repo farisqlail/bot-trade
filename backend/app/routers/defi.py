@@ -59,6 +59,55 @@ async def get_wallet_balance(
         raise HTTPException(status_code=502, detail=f"Wallet balance fetch failed: {str(e)}")
 
 
+@router.get("/config")
+async def get_defi_config(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return current DeFi settings (no private key). Use to verify configured network."""
+    result = await db.execute(select(Settings).where(Settings.user_id == user_id))
+    s = result.scalar_one_or_none()
+    if not s:
+        raise HTTPException(status_code=404, detail="Settings not found")
+    configured_network = s.defi_network or "arbitrum"
+    balances = {}
+    if s.defi_wallet_address:
+        for net in ["arbitrum", "base", "optimism", "polygon"]:
+            try:
+                b = await DeFiService(network=net).get_balance(s.defi_wallet_address)
+                balances[net] = {"eth": b["eth_balance"], "usdc": b["usdc_balance"]}
+            except Exception:
+                balances[net] = {"eth": None, "usdc": None}
+    return {
+        "configured_network": configured_network,
+        "defi_enabled": s.defi_enabled,
+        "wallet_address": s.defi_wallet_address,
+        "has_private_key": s.defi_has_private_key,
+        "balances": balances,
+    }
+
+
+@router.get("/check/{symbol}")
+async def check_token_support(
+    symbol: str,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Settings).where(Settings.user_id == user_id))
+    s = result.scalar_one_or_none()
+    network = (s.defi_network if s else None) or "arbitrum"
+    svc = DeFiService(network=network)
+    meta = await svc.get_token_metadata(symbol.upper())
+    if not meta:
+        return {"supported": False, "symbol": symbol.upper(), "network": None, "address": None}
+    return {
+        "supported": True,
+        "symbol": symbol.upper(),
+        "network": meta.get("network", network),
+        "address": meta["address"],
+    }
+
+
 @router.post("/swap")
 async def execute_swap(
     req: SwapRequest,
@@ -74,10 +123,57 @@ async def execute_swap(
     if not s.defi_wallet_address or not s.defi_wallet_private_key_encrypted:
         raise HTTPException(status_code=400, detail="Wallet not configured")
 
-    service = DeFiService(network=s.defi_network or "arbitrum")
-    token_address = service.get_token_address(req.symbol)
-    if not token_address:
-        raise HTTPException(status_code=400, detail=f"Symbol {req.symbol} not supported for DeFi")
+    configured_network = s.defi_network or "arbitrum"
+    discovery_svc = DeFiService(network=configured_network)
+    # strict_network=True: only swap on user's configured network, never silently route to another chain
+    token_meta = await discovery_svc.get_token_metadata(req.symbol, strict_network=True)
+    if not token_meta:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Symbol {req.symbol} has no DEX pool on {configured_network}. "
+                   f"Change your DeFi network in settings or use a token available on {configured_network}."
+        )
+
+    token_address = token_meta["address"]
+    service = DeFiService(network=configured_network)
+
+    # Pre-flight: verify user has gas on configured network before attempting swap
+    try:
+        bal = await service.get_balance(s.defi_wallet_address)
+        if bal["eth_balance"] < 0.0001:
+            gas_token = "BNB" if configured_network == "bsc" else "MATIC" if configured_network == "polygon" else "ETH"
+            hint = ""
+            if configured_network != "arbitrum":
+                try:
+                    arb_bal = await DeFiService(network="arbitrum").get_balance(s.defi_wallet_address)
+                    if arb_bal["eth_balance"] >= 0.0001:
+                        hint = f" Your wallet has {arb_bal['eth_balance']:.6f} ETH on Arbitrum — change DeFi network to Arbitrum in Settings."
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=400,
+                detail=f"No gas on {configured_network}: wallet has {bal['eth_balance']:.6f} {gas_token}.{hint}"
+            )
+    except HTTPException:
+        raise
+    except Exception as pre_err:
+        # Base/polygon RPC failed — still check Arbitrum to guide user
+        if configured_network != "arbitrum":
+            try:
+                arb_bal = await DeFiService(network="arbitrum").get_balance(s.defi_wallet_address)
+                if arb_bal["eth_balance"] >= 0.0001:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Cannot reach {configured_network} RPC ({pre_err}). "
+                            f"Your wallet has {arb_bal['eth_balance']:.6f} ETH on Arbitrum — "
+                            f"go to BotSettings → DeFi → change Network to Arbitrum One → Save."
+                        ),
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                pass
 
     try:
         if req.direction == "buy":
@@ -91,12 +187,14 @@ async def execute_swap(
                 token_address,
                 req.amount_usdc,
                 slippage=s.defi_slippage / 100,
+                wallet_address=s.defi_wallet_address,
             )
         elif req.direction == "sell":
             return await service.sell_all_to_usdc(
                 s.defi_wallet_private_key_encrypted,
                 token_address,
                 slippage=s.defi_slippage / 100,
+                wallet_address=s.defi_wallet_address,
             )
         else:
             raise HTTPException(status_code=400, detail="direction must be 'buy' or 'sell'")

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { aiApi } from '../services/api'
+import { BookmarkPlus, BookmarkCheck } from 'lucide-react'
+import { aiApi, spotWatchlistApi } from '../services/api'
+
+const toSpotSymbol = (s) => s.replace(/USDT$/, '')
 
 const ACTION_STYLES = {
   BUY: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
@@ -29,7 +32,26 @@ export default function AIAnalysis() {
   const [countdown, setCountdown] = useState(POLL_INTERVAL)
   const [watchInput, setWatchInput] = useState('')
   const [watchLoading, setWatchLoading] = useState(false)
+  const [watchlistSet, setWatchlistSet] = useState(new Set())
+  const [addingSet, setAddingSet] = useState(new Set())
   const prevOpportunities = useRef([])
+
+  useEffect(() => {
+    spotWatchlistApi.getAll()
+      .then(res => setWatchlistSet(new Set(res.data.map(i => i.symbol))))
+      .catch(() => {})
+  }, [])
+
+  const addToSpotWatchlist = async (symbol) => {
+    const sym = toSpotSymbol(symbol)
+    if (watchlistSet.has(sym)) return
+    setAddingSet(prev => new Set(prev).add(sym))
+    try {
+      await spotWatchlistApi.create({ symbol: sym })
+      setWatchlistSet(prev => new Set(prev).add(sym))
+    } catch { /* ignore */ }
+    finally { setAddingSet(prev => { const s = new Set(prev); s.delete(sym); return s }) }
+  }
   const countdownRef = useRef(POLL_INTERVAL)
 
   const pushNotifications = (newData) => {
@@ -256,6 +278,27 @@ export default function AIAnalysis() {
                       Paper Trade #{item.paper_trade_id}
                     </span>
                   ) : null}
+                  {(() => {
+                    const sym = toSpotSymbol(item.symbol)
+                    const added = watchlistSet.has(sym)
+                    const loading = addingSet.has(sym)
+                    return (
+                      <button
+                        onClick={() => addToSpotWatchlist(item.symbol)}
+                        disabled={added || loading}
+                        title={added ? 'Di spot watchlist' : 'Tambah ke Spot Watchlist'}
+                        className={clsx(
+                          'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                          added
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400 cursor-default'
+                            : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-indigo-500/40 hover:text-indigo-300'
+                        )}
+                      >
+                        {added ? <BookmarkCheck size={11} /> : <BookmarkPlus size={11} />}
+                        {added ? 'Saved' : '+ Spot'}
+                      </button>
+                    )
+                  })()}
                 </div>
               </div>
 

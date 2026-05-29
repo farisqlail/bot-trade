@@ -11,6 +11,7 @@ const FLAT_TOP = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/active-trades', label: 'Active Trades', icon: TrendingUp },
   { path: '/trade-history', label: 'Trade History', icon: History },
+  { path: '/spot', label: 'Spot Trading', icon: TrendingUp },
 ]
 
 const SCAN_ITEMS = [

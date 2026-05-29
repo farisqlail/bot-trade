@@ -71,7 +71,7 @@ export const aiApi = {
   },
   watchAndScan: (symbol, execute_defi = true) =>
     api.post('/ai/watch', { symbol, execute_defi }, { timeout: 300000 }),
-  getAltcoins: (params) => api.get('/ai/altcoins', { params }),
+  getAltcoins: (params) => api.get('/ai/altcoins', { params, timeout: 120000 }),
 }
 
 export const riskApi = {
@@ -100,6 +100,7 @@ export const defiApi = {
   testConnection: (data) => api.post('/defi/test-connection', data),
   getBalance: () => api.get('/defi/balance'),
   swap: (data) => api.post('/defi/swap', data),
+  checkSupport: (symbol) => api.get(`/defi/check/${symbol}`),
 }
 
 export const gtradeApi = {
@@ -136,6 +137,40 @@ export const chartApi = {
   getSignal: (symbol) => api.get(`/chart/${symbol}/signal`),
   getActiveTrade: (symbol) => api.get(`/chart/${symbol}/active-trade`),
   getWatchlist: (limit = 30) => api.get('/chart/watchlist/ranking', { params: { limit } }),
+}
+
+export const spotApi = {
+  getSummary: () => api.get('/spot-trades/stats/summary'),
+  listTrades: (params) => api.get('/spot-trades/', { params }),
+  createTrade: (data) => api.post('/spot-trades/', data),
+  updateTrade: (id, data) => api.put(`/spot-trades/${id}`, data),
+  deleteTrade: (id) => api.delete(`/spot-trades/${id}`),
+
+  listWatchlist: () => api.get('/spot-watchlist/'),
+  addWatchlist: (data) => api.post('/spot-watchlist/', data),
+  updateWatchlist: (id, data) => api.put(`/spot-watchlist/${id}`, data),
+  deleteWatchlist: (id) => api.delete(`/spot-watchlist/${id}`),
+  getPrices: () => api.get('/spot-watchlist/prices'),
+  getSignals: () => api.get('/spot-watchlist/signals'),
+}
+
+// ===== SPOT TRADES API =====
+export const spotTradesApi = {
+  getAll: (params) => api.get('/spot-trades', { params }),
+  create: (data) => api.post('/spot-trades', data),
+  update: (id, data) => api.put(`/spot-trades/${id}`, data),
+  delete: (id) => api.delete(`/spot-trades/${id}`),
+  getSummary: () => api.get('/spot-trades/stats/summary'),
+}
+
+// ===== SPOT WATCHLIST API =====
+export const spotWatchlistApi = {
+  getAll: () => api.get('/spot-watchlist'),
+  create: (data) => api.post('/spot-watchlist', data),
+  update: (id, data) => api.put(`/spot-watchlist/${id}`, data),
+  delete: (id) => api.delete(`/spot-watchlist/${id}`),
+  getPrices: () => api.get('/spot-watchlist/prices'),
+  getSignals: () => api.get('/spot-watchlist/signals'),
 }
 
 export default api
