@@ -184,8 +184,37 @@ SWAP_ROUTER_ABI = [
         "outputs": [{"name": "amountOut", "type": "uint256"}],
         "stateMutability": "payable",
         "type": "function",
-    }
+    },
+    {
+        "inputs": [
+            {
+                "components": [
+                    {"name": "path", "type": "bytes"},
+                    {"name": "recipient", "type": "address"},
+                    {"name": "amountIn", "type": "uint256"},
+                    {"name": "amountOutMinimum", "type": "uint256"},
+                ],
+                "name": "params",
+                "type": "tuple",
+            }
+        ],
+        "name": "exactInput",
+        "outputs": [{"name": "amountOut", "type": "uint256"}],
+        "stateMutability": "payable",
+        "type": "function",
+    },
 ]
+
+
+def _encode_multihop_path(addr_in: str, fee1: int, addr_mid: str, fee2: int, addr_out: str) -> bytes:
+    """Encode a 2-hop Uniswap V3 path: tokenIn + fee1 + tokenMid + fee2 + tokenOut (66 bytes)."""
+    return (
+        bytes.fromhex(addr_in[2:].lower())
+        + fee1.to_bytes(3, "big")
+        + bytes.fromhex(addr_mid[2:].lower())
+        + fee2.to_bytes(3, "big")
+        + bytes.fromhex(addr_out[2:].lower())
+    )
 
 
 def encrypt_private_key(private_key: str) -> str:
@@ -467,32 +496,50 @@ class DeFiService:
         await self._approve(private_key, usdc_addr, router_addr, amount_in, nonce, gas_price)
 
         router = self.w3.eth.contract(address=router_addr, abi=SWAP_ROUTER_ABI)
-        swap_tx = await router.functions.exactInputSingle({
-            "tokenIn": usdc_addr,
-            "tokenOut": token_addr,
-            "fee": fee,
-            "recipient": wallet_addr,
-            "amountIn": amount_in,
-            "amountOutMinimum": 0,
-            "sqrtPriceLimitX96": 0,
-        }).build_transaction({
-            "from": wallet_addr,
-            "nonce": nonce + 1,
-            "gasPrice": gas_price,
-            "chainId": self.net["chain_id"],
-            "gas": 300000,
-        })
+        base_tx = {"from": wallet_addr, "nonce": nonce + 1, "gasPrice": gas_price, "chainId": self.net["chain_id"]}
+
+        # Try single-hop first (USDC → TOKEN); fall back to multi-hop via WETH
+        weth_addr = Web3.to_checksum_address(self.net.get("weth", "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"))
+        use_multihop = False
+        if usdc_addr.lower() != token_addr.lower():
+            single_fn = router.functions.exactInputSingle({
+                "tokenIn": usdc_addr, "tokenOut": token_addr, "fee": fee,
+                "recipient": wallet_addr, "amountIn": amount_in,
+                "amountOutMinimum": 0, "sqrtPriceLimitX96": 0,
+            })
+            try:
+                await single_fn.estimate_gas({**base_tx, "gas": 400000})
+            except Exception:
+                use_multihop = True
+                logger.info("defi_swap_no_direct_pool_fallback_multihop",
+                            token=token_addr, network=self.network)
+
+        if use_multihop:
+            path = _encode_multihop_path(usdc_addr, 500, weth_addr, fee, token_addr)
+            swap_tx = await router.functions.exactInput({
+                "path": path, "recipient": wallet_addr,
+                "amountIn": amount_in, "amountOutMinimum": 0,
+            }).build_transaction({**base_tx, "gas": 500000})
+        else:
+            swap_tx = await router.functions.exactInputSingle({
+                "tokenIn": usdc_addr, "tokenOut": token_addr, "fee": fee,
+                "recipient": wallet_addr, "amountIn": amount_in,
+                "amountOutMinimum": 0, "sqrtPriceLimitX96": 0,
+            }).build_transaction({**base_tx, "gas": 300000})
+
         signed = Account.sign_transaction(swap_tx, private_key)
         swap_hash = await self.w3.eth.send_raw_transaction(signed.raw_transaction)
         tx_hex = swap_hash.hex()
-        logger.info("defi_swap_buy_submitted", tx=tx_hex, amount_usdc=amount_usdc, network=self.network)
-        # Return immediately after broadcast — don't block waiting for confirmation
+        route = "USDC→WETH→TOKEN" if use_multihop else "USDC→TOKEN"
+        logger.info("defi_swap_buy_submitted", tx=tx_hex, amount_usdc=amount_usdc,
+                    network=self.network, route=route)
         return {
             "direction": "buy",
             "status": "submitted",
             "tx_hash": tx_hex,
             "amount_usdc": amount_usdc,
             "network": self.network,
+            "route": route,
         }
 
     async def sell_all_to_usdc(
@@ -520,30 +567,43 @@ class DeFiService:
         await self._approve(private_key, token_addr, router_addr, token_balance, nonce, gas_price)
 
         router = self.w3.eth.contract(address=router_addr, abi=SWAP_ROUTER_ABI)
-        swap_tx = await router.functions.exactInputSingle({
-            "tokenIn": token_addr,
-            "tokenOut": usdc_addr,
-            "fee": fee,
-            "recipient": wallet_addr,
-            "amountIn": token_balance,
-            "amountOutMinimum": 0,
-            "sqrtPriceLimitX96": 0,
-        }).build_transaction({
-            "from": wallet_addr,
-            "nonce": nonce + 1,
-            "gasPrice": gas_price,
-            "chainId": self.net["chain_id"],
-            "gas": 300000,
+        base_tx = {"from": wallet_addr, "nonce": nonce + 1, "gasPrice": gas_price, "chainId": self.net["chain_id"]}
+        weth_addr = Web3.to_checksum_address(self.net.get("weth", "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"))
+
+        # Try single-hop TOKEN → USDC; fall back to multi-hop TOKEN → WETH → USDC
+        use_multihop = False
+        single_fn = router.functions.exactInputSingle({
+            "tokenIn": token_addr, "tokenOut": usdc_addr, "fee": fee,
+            "recipient": wallet_addr, "amountIn": token_balance,
+            "amountOutMinimum": 0, "sqrtPriceLimitX96": 0,
         })
+        try:
+            await single_fn.estimate_gas({**base_tx, "gas": 400000})
+        except Exception:
+            use_multihop = True
+            logger.info("defi_swap_sell_no_direct_pool_fallback_multihop",
+                        token=token_addr, network=self.network)
+
+        if use_multihop:
+            path = _encode_multihop_path(token_addr, fee, weth_addr, 500, usdc_addr)
+            swap_tx = await router.functions.exactInput({
+                "path": path, "recipient": wallet_addr,
+                "amountIn": token_balance, "amountOutMinimum": 0,
+            }).build_transaction({**base_tx, "gas": 500000})
+        else:
+            swap_tx = await single_fn.build_transaction({**base_tx, "gas": 300000})
+
         signed = Account.sign_transaction(swap_tx, private_key)
         swap_hash = await self.w3.eth.send_raw_transaction(signed.raw_transaction)
         tx_hex = swap_hash.hex()
-        logger.info("defi_swap_sell_submitted", tx=tx_hex, token_balance=token_balance, network=self.network)
-        # Return immediately after broadcast — don't block waiting for confirmation
+        route = "TOKEN→WETH→USDC" if use_multihop else "TOKEN→USDC"
+        logger.info("defi_swap_sell_submitted", tx=tx_hex, token_balance=token_balance,
+                    network=self.network, route=route)
         return {
             "direction": "sell",
             "status": "submitted",
             "tx_hash": tx_hex,
             "token_amount_raw": token_balance,
             "network": self.network,
+            "route": route,
         }

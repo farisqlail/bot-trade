@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { portfolioApi } from '../services/api'
 import clsx from 'clsx'
-import { RefreshCw, Wallet, TrendingUp, AlertCircle } from 'lucide-react'
+import { RefreshCw, Wallet, AlertCircle } from 'lucide-react'
 
 const fmt = (n, dec = 2) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })
@@ -29,6 +29,16 @@ export default function Portfolio() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+  const [enabled, setEnabled] = useState(null) // null = all; Set when user toggles
+
+  const toggleSource = (key) => {
+    setEnabled(prev => {
+      const all = prev ?? new Set(Object.keys(data?.sources || {}))
+      const next = new Set(all)
+      if (next.has(key)) { next.delete(key) } else { next.add(key) }
+      return next
+    })
+  }
 
   const fetchData = async (silent = false) => {
     if (!silent) setLoading(true)
@@ -60,24 +70,50 @@ export default function Portfolio() {
   )
 
   const { total_portfolio_value, sources, errors } = data
-  const entries = Object.entries(sources || {})
+  const allEntries = Object.entries(sources || {})
+
+  const activeKeys = enabled ?? new Set(allEntries.map(([k]) => k))
+  const entries = allEntries.filter(([k]) => activeKeys.has(k))
+  const filteredTotal = entries.reduce((s, [, src]) => s + (src.total || 0), 0)
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold">Portfolio</h2>
           <p className="text-sm text-zinc-500 mt-0.5">Consolidated view across all accounts</p>
         </div>
-        <button
-          onClick={() => fetchData(true)}
-          disabled={refreshing}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs transition-colors"
-        >
-          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Source filter toggles */}
+          {allEntries.map(([key, src]) => {
+            const colors = SOURCE_COLORS[key] || { dot: 'bg-zinc-400', text: 'text-zinc-400' }
+            const on = activeKeys.has(key)
+            return (
+              <button
+                key={key}
+                onClick={() => toggleSource(key)}
+                className={clsx(
+                  'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all',
+                  on
+                    ? clsx('border-transparent bg-zinc-700 text-zinc-200')
+                    : 'border-zinc-800 bg-transparent text-zinc-600 opacity-50'
+                )}
+              >
+                <span className={clsx('w-2 h-2 rounded-full', on ? colors.dot : 'bg-zinc-600')} />
+                {src.label}
+              </button>
+            )
+          })}
+          <button
+            onClick={() => fetchData(true)}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs transition-colors"
+          >
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Total hero */}
@@ -88,14 +124,19 @@ export default function Portfolio() {
           </div>
           <span className="text-sm text-zinc-400">Total Portfolio Value</span>
         </div>
-        <p className="text-4xl font-bold text-white">${fmt(total_portfolio_value)}</p>
+        <div className="flex items-baseline gap-3">
+          <p className="text-4xl font-bold text-white">${fmt(filteredTotal)}</p>
+          {filteredTotal !== total_portfolio_value && (
+            <span className="text-sm text-zinc-500">of ${fmt(total_portfolio_value)} total</span>
+          )}
+        </div>
 
         {/* Allocation bar */}
-        {total_portfolio_value > 0 && (
+        {filteredTotal > 0 && (
           <div className="mt-5">
             <div className="flex h-2.5 rounded-full overflow-hidden gap-0.5">
               {entries.map(([key, src]) => {
-                const pct = total_portfolio_value > 0 ? (src.total / total_portfolio_value) * 100 : 0
+                const pct = filteredTotal > 0 ? (src.total / filteredTotal) * 100 : 0
                 if (pct < 0.5) return null
                 return (
                   <div
@@ -110,7 +151,7 @@ export default function Portfolio() {
             <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5">
               {entries.map(([key, src]) => {
                 if (src.total <= 0) return null
-                const pct = total_portfolio_value > 0 ? (src.total / total_portfolio_value) * 100 : 0
+                const pct = filteredTotal > 0 ? (src.total / filteredTotal) * 100 : 0
                 return (
                   <div key={key} className="flex items-center gap-1.5 text-xs text-zinc-500">
                     <span className={clsx('w-2 h-2 rounded-full', SOURCE_COLORS[key]?.dot || 'bg-zinc-600')} />
@@ -128,7 +169,7 @@ export default function Portfolio() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {entries.map(([key, src]) => {
           const colors = SOURCE_COLORS[key] || { bg: 'bg-zinc-800/60 border-zinc-700/40', text: 'text-zinc-400' }
-          const pct = total_portfolio_value > 0 ? (src.total / total_portfolio_value) * 100 : 0
+          const pct = filteredTotal > 0 ? (src.total / filteredTotal) * 100 : 0
           return (
             <div key={key} className="bg-zinc-900 border border-zinc-800/60 rounded-xl p-5">
               <div className="flex items-start justify-between mb-3">

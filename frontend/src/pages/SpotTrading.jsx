@@ -388,9 +388,10 @@ function TokenDetailModal({ item, onClose, onDone }) {
     if (!amount || !entryPrice) { setSubmitErr('Amount dan Entry Price wajib diisi'); return }
     setSubmitting(true)
     setSubmitErr(null)
+    let createdTradeId = null
     try {
       // 1. Record spot trade
-      await spotApi.createTrade({
+      const tradeRes = await spotApi.createTrade({
         symbol: item.symbol,
         base_token: item.symbol,
         quote_token: 'USDC',
@@ -402,6 +403,7 @@ function TokenDetailModal({ item, onClose, onDone }) {
           ? `AI: ${analysis.recommended_action}, conf ${Math.round((analysis.confidence||0)*100)}%`
           : null,
       })
+      createdTradeId = tradeRes.data?.id ?? null
 
       // 2. Auto TP → update watchlist target_sell_price so Celery monitors it
       if (autoTp && tpPrice) {
@@ -410,11 +412,19 @@ function TokenDetailModal({ item, onClose, onDone }) {
 
       // 3. DeFi execute (optional)
       if (execMode === 'defi') {
-        await defiApi.swap({
-          symbol: `${item.symbol}USDT`,
-          direction: 'buy',
-          amount_usdc: Number(amount),
-        })
+        try {
+          await defiApi.swap({
+            symbol: `${item.symbol}USDT`,
+            direction: 'buy',
+            amount_usdc: Number(amount),
+          })
+        } catch (defiErr) {
+          // DeFi failed — mark trade as FAILED so it won't show in Active list
+          if (createdTradeId) {
+            try { await spotApi.updateTrade(createdTradeId, { status: 'FAILED' }) } catch { /* ignore */ }
+          }
+          throw defiErr
+        }
       }
 
       setSubmitOk(true)
@@ -863,13 +873,21 @@ export default function SpotTrading() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-800 text-left">
-                  {['Symbol', 'Entry', 'Amount', 'Target TP', 'Tanggal', 'TX', 'Aksi'].map(h => (
+                  {['Symbol', 'Entry', 'Harga Kini', 'PnL %', 'PnL USDC', 'Amount', 'Target TP', 'Tanggal', 'TX', 'Aksi'].map(h => (
                     <th key={h} className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {trades.filter(t => t.trade_type === 'BUY' && t.status === 'PENDING').map(t => (
+                {trades.filter(t => t.trade_type === 'BUY' && t.status === 'PENDING').map(t => {
+                  const livePrice = signals.find(s => s.symbol === t.symbol)?.price ?? null
+                  const pnlPct = livePrice != null && t.price_at_trade
+                    ? ((livePrice - t.price_at_trade) / t.price_at_trade) * 100
+                    : null
+                  const pnlUsdc = pnlPct != null && t.amount_in
+                    ? (pnlPct / 100) * t.amount_in
+                    : null
+                  return (
                   <tr key={t.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
                     <td className="px-4 py-3">
                       <button
@@ -881,6 +899,15 @@ export default function SpotTrading() {
                       </button>
                     </td>
                     <td className="px-4 py-3 text-zinc-300">${fmt(t.price_at_trade, 6)}</td>
+                    <td className="px-4 py-3 text-zinc-300">
+                      {livePrice != null ? `$${fmt(livePrice, 6)}` : '—'}
+                    </td>
+                    <td className={clsx('px-4 py-3 font-semibold', pnlPct == null ? 'text-zinc-600' : pnlPct >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                      {pnlPct != null ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%` : '—'}
+                    </td>
+                    <td className={clsx('px-4 py-3 font-semibold', pnlUsdc == null ? 'text-zinc-600' : pnlUsdc >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                      {pnlUsdc != null ? `${pnlUsdc >= 0 ? '+' : ''}$${fmt(Math.abs(pnlUsdc), 2)}` : '—'}
+                    </td>
                     <td className="px-4 py-3 text-zinc-300">{fmt(t.amount_in, 2)} USDC</td>
                     <td className="px-4 py-3 text-emerald-400">
                       {t.price_target ? `$${fmt(t.price_target, 6)}` : '—'}
@@ -913,7 +940,8 @@ export default function SpotTrading() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

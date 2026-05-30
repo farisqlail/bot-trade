@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { BookmarkPlus, BookmarkCheck } from 'lucide-react'
 import { aiApi, spotWatchlistApi } from '../services/api'
+import QuickBacktest from '../components/QuickBacktest'
 
 const toSpotSymbol = (s) => s.replace(/USDT$/, '')
 
@@ -240,7 +241,7 @@ export default function AIAnalysis() {
         </div>
       ) : opportunities.length ? (
         <div className="grid gap-4 xl:grid-cols-2">
-          {[...new Map(opportunities.map((o) => [o.symbol, o])).values()].map((item) => (
+          {[...new Map(opportunities.map((o) => [o.symbol, o])).values()].map((item, idx) => (
             <div key={item.symbol} className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
               <div className="flex flex-col gap-3 border-b border-gray-800 pb-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -356,6 +357,12 @@ export default function AIAnalysis() {
                 </p>
                 <p className="mt-2 text-sm leading-6 text-gray-300">{item.analysis_text}</p>
               </div>
+
+              <QuickBacktest
+                symbol={item.symbol}
+                delay={idx * 800}
+                days={30}
+              />
             </div>
           ))}
         </div>

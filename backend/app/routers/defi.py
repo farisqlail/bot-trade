@@ -8,6 +8,7 @@ from app.database import get_db
 from app.core.security import get_current_user_id
 from app.models.settings import Settings
 from app.services.defi_service import DeFiService, NETWORKS
+from app.services.telegram_service import TelegramService
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -182,7 +183,7 @@ async def execute_swap(
                 req.amount_usdc = round(balance["usdc_balance"] * (s.defi_trade_percent / 100), 2)
             if req.amount_usdc < 0.01:
                 raise HTTPException(status_code=400, detail="USDC balance too low")
-            return await service.swap_usdc_to_token(
+            swap_result = await service.swap_usdc_to_token(
                 s.defi_wallet_private_key_encrypted,
                 token_address,
                 req.amount_usdc,
@@ -190,14 +191,18 @@ async def execute_swap(
                 fee=token_meta.get("fee", 3000),
                 wallet_address=s.defi_wallet_address,
             )
+            _send_defi_telegram(req.symbol, "BUY", configured_network, req.amount_usdc, swap_result, s)
+            return swap_result
         elif req.direction == "sell":
-            return await service.sell_all_to_usdc(
+            swap_result = await service.sell_all_to_usdc(
                 s.defi_wallet_private_key_encrypted,
                 token_address,
                 slippage=s.defi_slippage / 100,
                 fee=token_meta.get("fee", 3000),
                 wallet_address=s.defi_wallet_address,
             )
+            _send_defi_telegram(req.symbol, "SELL", configured_network, None, swap_result, s)
+            return swap_result
         else:
             raise HTTPException(status_code=400, detail="direction must be 'buy' or 'sell'")
     except HTTPException:
@@ -205,3 +210,52 @@ async def execute_swap(
     except Exception as e:
         logger.error("defi_swap_error", error=str(e), symbol=req.symbol, direction=req.direction)
         raise HTTPException(status_code=502, detail=f"Swap failed: {str(e)}")
+
+
+def _send_defi_telegram(symbol: str, direction: str, network: str, amount_usdc, result: dict, s) -> None:
+    import asyncio
+    tx_hash = result.get("tx_hash", "")
+    route = result.get("route", "")
+    status = result.get("status", "submitted")
+    short_tx = f"{tx_hash[:10]}…{tx_hash[-8:]}" if len(tx_hash) > 20 else tx_hash
+    arbiscan = f"https://arbiscan.io/tx/{tx_hash}" if network == "arbitrum" else ""
+
+    base_sym = symbol.replace("USDT", "").replace("USDC", "").upper()
+    emoji = "🟢" if direction == "BUY" else "🔴"
+
+    if direction == "BUY":
+        amount_str = f"${amount_usdc:.2f} USDC" if amount_usdc else "auto"
+        lines = [
+            f"{emoji} <b>DeFi BUY</b> — <code>{base_sym}</code> on <b>{network.capitalize()}</b>",
+            f"Amount: <code>{amount_str}</code>",
+            f"Route: <code>{route}</code>" if route else "",
+            f"Status: <code>{status}</code>",
+            f"TX: <code>{short_tx}</code>",
+            f'<a href="{arbiscan}">View on Arbiscan</a>' if arbiscan else "",
+        ]
+    else:
+        lines = [
+            f"{emoji} <b>DeFi SELL</b> — <code>{base_sym}</code> on <b>{network.capitalize()}</b>",
+            f"Route: <code>{route}</code>" if route else "",
+            f"Status: <code>{status}</code>",
+            f"TX: <code>{short_tx}</code>",
+            f'<a href="{arbiscan}">View on Arbiscan</a>' if arbiscan else "",
+        ]
+
+    text = "\n".join(l for l in lines if l)
+
+    async def _notify():
+        try:
+            tg = TelegramService()
+            await tg.send_message(text)
+        except Exception:
+            pass
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(_notify())
+        else:
+            loop.run_until_complete(_notify())
+    except Exception:
+        pass

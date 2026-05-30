@@ -256,16 +256,42 @@ async def scan_altcoins(
     altcoins = [t for t in all_tickers if t["symbol"] not in _LARGE_CAPS]
 
     # DeFi-only scan: filter to tokens on user's configured network
-    # Uses static registry + in-memory cache ONLY — no live DexScreener calls (avoids timeout)
     s_row = (await db.execute(select(Settings).where(Settings.user_id == user_id))).scalar_one_or_none()
     if s_row and s_row.defi_enabled and s_row.defi_only_scan:
         defi_net = s_row.defi_network or "arbitrum"
-        from app.services.defi_service import _dexscreener_cache
+        from app.services.defi_service import DeFiService as _DeFiSvc, _dexscreener_cache
+
+        # Enrich ARBITRUM_KNOWN_TOKENS in-memory with live DexScreener lookups
+        # for unknown high-volume symbols (top 50 by turnover, concurrent, 8-slot semaphore)
+        _unknown = [
+            t["symbol"] for t in altcoins
+            if t["symbol"] not in ARBITRUM_KNOWN_TOKENS
+            and f"strict:{defi_net}:{t['symbol']}" not in _dexscreener_cache
+        ]
+        _by_vol = sorted(
+            _unknown,
+            key=lambda s: next((t.get("turnover_24h", 0) for t in altcoins if t["symbol"] == s), 0),
+            reverse=True,
+        )[:50]
+
+        if _by_vol:
+            _svc = _DeFiSvc(network=defi_net)
+            _sem = asyncio.Semaphore(8)
+
+            async def _enrich(sym: str):
+                async with _sem:
+                    try:
+                        meta = await _svc.get_token_metadata(sym, strict_network=True)
+                        if meta:
+                            ARBITRUM_KNOWN_TOKENS[sym] = {"address": meta["address"], "fee": meta.get("fee", 3000)}
+                    except Exception:
+                        pass
+
+            await asyncio.gather(*[_enrich(s) for s in _by_vol], return_exceptions=True)
 
         def _in_static_or_cache(sym: str) -> bool:
             if defi_net == "arbitrum" and sym in ARBITRUM_KNOWN_TOKENS:
                 return True
-            # Accept only already-cached positive results — no new API calls during scan
             cached = _dexscreener_cache.get(f"strict:{defi_net}:{sym}")
             return bool(cached)
 

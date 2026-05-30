@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
-import { RefreshCw, TrendingUp, TrendingDown, Minus, AlertCircle, BookmarkPlus, BookmarkCheck } from 'lucide-react'
+import { RefreshCw, TrendingUp, TrendingDown, Minus, AlertCircle, BookmarkPlus, BookmarkCheck, FlaskConical } from 'lucide-react'
 import { aiApi, spotWatchlistApi } from '../services/api'
+import QuickBacktest from '../components/QuickBacktest'
 
 const toSpotSymbol = (s) => s.replace(/USDT$/, '')
 
@@ -35,6 +36,7 @@ export default function AltcoinScanner() {
   const [limit, setLimit] = useState(30)
   const [watchlistSet, setWatchlistSet] = useState(new Set())
   const [addingSet, setAddingSet] = useState(new Set())
+  const [backtestSymbol, setBacktestSymbol] = useState(null)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -186,6 +188,7 @@ export default function AltcoinScanner() {
                 <th className="px-4 py-3 text-right text-xs text-gray-500 font-medium uppercase tracking-wider">Volume 24h</th>
                 <th className="px-4 py-3 text-center text-xs text-gray-500 font-medium uppercase tracking-wider">Signal</th>
                 <th className="px-4 py-3 text-center text-xs text-gray-500 font-medium uppercase tracking-wider">Spot</th>
+                <th className="px-4 py-3 text-center text-xs text-gray-500 font-medium uppercase tracking-wider">BT</th>
               </tr>
             </thead>
             <tbody>
@@ -193,12 +196,10 @@ export default function AltcoinScanner() {
                 const cfg = ACTION_CONFIG[coin.recommended_action] ?? ACTION_CONFIG.HOLD
                 const isUp = coin.change_24h > 0
                 const isDown = coin.change_24h < 0
+                const btOpen = backtestSymbol === coin.symbol
                 return (
-                  <tr
-                    key={coin.symbol}
-                    onClick={() => navigate(`/chart?symbol=${coin.symbol}`)}
-                    className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors cursor-pointer"
-                  >
+                  <Fragment key={coin.symbol}>
+                  <tr onClick={() => navigate(`/chart?symbol=${coin.symbol}`)} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors cursor-pointer">
                     <td className="px-4 py-3 text-gray-600 text-xs">{i + 1}</td>
                     <td className="px-4 py-3">
                       <span className="font-semibold text-white">
@@ -249,7 +250,29 @@ export default function AltcoinScanner() {
                         )
                       })()}
                     </td>
+                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => setBacktestSymbol(btOpen ? null : coin.symbol)}
+                        title="Quick backtest"
+                        className={clsx(
+                          'p-1.5 rounded-lg transition-colors',
+                          btOpen
+                            ? 'text-indigo-400 bg-indigo-500/15'
+                            : 'text-zinc-500 hover:text-indigo-300 hover:bg-indigo-500/10'
+                        )}
+                      >
+                        <FlaskConical size={14} />
+                      </button>
+                    </td>
                   </tr>
+                  {btOpen && (
+                    <tr className="bg-gray-900/40 border-b border-gray-800/50">
+                      <td colSpan={8} className="px-6 pb-4 pt-2">
+                        <QuickBacktest symbol={coin.symbol} delay={0} days={30} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })}
             </tbody>
