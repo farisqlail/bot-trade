@@ -52,6 +52,8 @@ export default function BotSettings() {
           gtrade_collateral_percent: res.data.gtrade_collateral_percent ?? 10,
           gtrade_sl_percent: res.data.gtrade_sl_percent ?? 3,
           continuous_scan_enabled: res.data.continuous_scan_enabled ?? true,
+          position_sizing_method: res.data.position_sizing_method || 'fixed',
+          kelly_fraction: res.data.kelly_fraction ?? 0.25,
         })
       })
       .catch(console.error)
@@ -257,6 +259,45 @@ export default function BotSettings() {
           <p className="mt-3 text-xs text-cyan-400">
             Rekomendasi start: 300 detik atau 5 menit. Cukup cepat buat scanner, tidak terlalu berisik.
           </p>
+        </div>
+
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+          <h3 className="font-semibold mb-1">Position Sizing</h3>
+          <p className="text-xs text-gray-500 mb-4">
+            <strong>Fixed</strong>: risk_amount = balance × risk_percent (simple, predictable).<br />
+            <strong>Kelly Criterion</strong>: risk_amount derived from historical win rate + R ratio — adapts to edge.
+            Requires ≥10 closed trades.
+          </p>
+
+          <div className="mb-4">
+            <label className="block text-xs text-gray-500 mb-2">Sizing Method</label>
+            <div className="flex gap-3">
+              {['fixed', 'kelly'].map((method) => (
+                <button
+                  key={method}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, position_sizing_method: method }))}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-colors ${
+                    form.position_sizing_method === method
+                      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                      : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-600'
+                  }`}
+                >
+                  {method === 'fixed' ? 'Fixed %' : 'Kelly Criterion'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {form.position_sizing_method === 'kelly' && (
+            <div className="space-y-3">
+              <Field label="Kelly Fraction (0.1 = 10%, 0.25 = quarter-Kelly, 1.0 = full-Kelly)" name="kelly_fraction" type="number" step="0.05" placeholder="0.25" />
+              <p className="text-xs text-amber-400">
+                ⚠️ Quarter-Kelly (0.25) recommended. Full Kelly (1.0) can cause large drawdowns.
+                Falls back to fixed risk_percent if &lt;10 trades or negative edge detected.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">

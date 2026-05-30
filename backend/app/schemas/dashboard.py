@@ -63,3 +63,25 @@ class DashboardResponse(BaseModel):
     risk: RiskStatus
     bot: BotStatus
     last_updated: datetime
+
+
+class EquityPoint(BaseModel):
+    date: Optional[str]
+    equity: float
+    drawdown: float
+
+
+class PerformanceAnalytics(BaseModel):
+    period_days: int
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: float
+    total_pnl: float
+    best_trade: float
+    worst_trade: float
+    profit_factor: float
+    sharpe_ratio: float
+    max_drawdown: float
+    avg_hold_hours: float
+    equity_curve: List[EquityPoint]

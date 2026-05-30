@@ -161,6 +161,42 @@ class ExchangeService:
         return candles
 
     @_retry
+    async def get_klines_range(
+        self, symbol: str, interval: str = "60", limit: int = 720, start_ms: int | None = None
+    ) -> list:
+        """Fetch historical klines, optionally from a start timestamp (epoch ms)."""
+        params: dict = {
+            "category": "linear",
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "limit": min(limit, 1000),
+        }
+        if start_ms:
+            params["start"] = start_ms
+        async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
+            response = await client.get(
+                f"{self.bybit_base_url}/v5/market/kline",
+                params=params,
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+        rows = ((payload.get("result") or {}).get("list") or [])
+        candles = [
+            {
+                "open_time": int(row[0]),
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+            }
+            for row in rows
+        ]
+        candles.sort(key=lambda c: c["open_time"])
+        return candles
+
+    @_retry
     async def _fetch_polymarket_raw(self, query: str) -> dict:
         async with httpx.AsyncClient(timeout=30.0, verify=_SSL_VERIFY) as client:
             response = await client.get(

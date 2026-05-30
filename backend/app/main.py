@@ -22,6 +22,10 @@ from app.core.exceptions import (
 from app.routers import auth, dashboard, trades, ai_analysis, risk, bot, tuning, chart
 from app.routers import defi, gmx, gtrade, bybit_futures, webhook
 from app.routers import spot_trades, spot_watchlist
+from app.routers import backtest
+from app.routers import ws as ws_router
+from app.routers import portfolio as portfolio_router
+from app.routers import sentiment as sentiment_router
 
 setup_logging()
 
@@ -70,6 +74,10 @@ app.include_router(bybit_futures.router, prefix=API_PREFIX)
 app.include_router(webhook.router, prefix=API_PREFIX)
 app.include_router(spot_trades.router, prefix=API_PREFIX)
 app.include_router(spot_watchlist.router, prefix=API_PREFIX)
+app.include_router(backtest.router, prefix=API_PREFIX)
+app.include_router(ws_router.router, prefix=API_PREFIX)
+app.include_router(portfolio_router.router, prefix=API_PREFIX)
+app.include_router(sentiment_router.router, prefix=API_PREFIX)
 
 if settings.PROMETHEUS_ENABLED:
     metrics_app = make_asgi_app()

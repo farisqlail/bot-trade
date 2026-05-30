@@ -3,12 +3,13 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, History, Brain, ShieldCheck,
   Settings2, LogOut, Zap, BarChart2, Layers, Triangle, Rocket,
-  ChevronDown, ScanSearch, Boxes
+  ChevronDown, ScanSearch, Boxes, PieChart
 } from 'lucide-react'
 import clsx from 'clsx'
 
 const FLAT_TOP = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/portfolio', label: 'Portfolio', icon: PieChart },
   { path: '/active-trades', label: 'Active Trades', icon: TrendingUp },
   { path: '/trade-history', label: 'Trade History', icon: History },
   { path: '/spot', label: 'Spot Trading', icon: TrendingUp },

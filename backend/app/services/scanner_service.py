@@ -10,6 +10,7 @@ from app.schemas.trade import TradeCreate
 from app.services.ai_service import AIService
 from app.services.exchange_service import ExchangeService
 from app.services.trading_service import TradingService
+from app.utils.crypto import safe_decrypt as _safe_decrypt
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -35,7 +36,19 @@ class ScannerService:
             momentum = 0.0
 
         change_score = float(market_data.get("change_24h") or 0.0) / 100.0
-        sentiment_score = float(market_data.get("polymarket_bias_score") or 0.0)
+
+        # Composite sentiment: Polymarket + Fear&Greed + CoinGecko trending
+        polymarket_score = float(market_data.get("polymarket_bias_score") or 0.0)
+        polymarket_count = int(market_data.get("polymarket_market_count") or 0)
+        fng_score = float(market_data.get("fng_score") or 0.0)
+        trending_syms = set(market_data.get("trending_symbols") or [])
+        base_sym = symbol.replace("USDT", "").replace("USDC", "").upper()
+        trending_bonus = 0.10 if base_sym in trending_syms else 0.0
+        if polymarket_count > 0:
+            sentiment_score = polymarket_score * 0.50 + fng_score * 0.35 + trending_bonus * 0.15
+        else:
+            sentiment_score = fng_score * 0.85 + trending_bonus * 0.15
+
         score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
 
         if score >= 0.001:
@@ -77,7 +90,10 @@ class ScannerService:
             "volume_24h": float(market_data.get("volume_24h") or 0.0),
             "polymarket_bias_score": round(float(market_data.get("polymarket_bias_score") or 0.0), 4),
             "polymarket_market_count": int(market_data.get("polymarket_market_count") or 0),
-            "analysis_text": f"Momentum {momentum:.4f}; 24h change {change_score:.4f}; Polymarket bias {sentiment_score:.4f}. {top_summary}",
+            "fear_greed_score": round(fng_score, 4),
+            "is_trending": base_sym in trending_syms,
+            "composite_sentiment": round(sentiment_score, 4),
+            "analysis_text": f"Momentum {momentum:.4f}; 24h change {change_score:.4f}; Composite sentiment {sentiment_score:.4f} (FnG {fng_score:.2f}, Polymarket {polymarket_score:.4f}). {top_summary}",
             "confidence": min(abs(score) * 8, 0.95),
             "market_data": market_data,
         }
@@ -307,8 +323,8 @@ class ScannerService:
         from app.services.bybit_order_service import BybitOrderService
         from app.services.telegram_service import TelegramService
 
-        api_key = settings.polymarket_api_key
-        api_secret = settings.polymarket_api_secret
+        api_key = _safe_decrypt(settings.polymarket_api_key)
+        api_secret = _safe_decrypt(settings.polymarket_api_secret)
         if not api_key or not api_secret:
             logger.warning("real_trade_skip_no_api_key", user_id=user_id)
             return None
@@ -350,7 +366,15 @@ class ScannerService:
         if not entry_price:
             return None
 
-        risk_amount = balance * (settings.risk_percent / 100)
+        effective_risk = settings.risk_percent
+        if settings.position_sizing_method == "kelly":
+            kelly_risk = await self.trading_svc.get_kelly_risk_percent(user_id, settings)
+            if kelly_risk <= 0:
+                logger.info("real_trade_skip_kelly_negative_edge", user_id=user_id, symbol=symbol)
+                return None
+            effective_risk = kelly_risk
+
+        risk_amount = balance * (effective_risk / 100)
         raw_qty = risk_amount / entry_price
         qty_str = f"{raw_qty:.3f}"
 
@@ -386,7 +410,7 @@ class ScannerService:
             quantity=raw_qty,
             leverage=settings.leverage,
             risk_amount=risk_amount,
-            risk_percent=settings.risk_percent,
+            risk_percent=effective_risk,
             notes=f"real_trade:auto:{action}",
             opened_at=datetime.now(timezone.utc),
         )
@@ -531,10 +555,27 @@ class ScannerService:
                         await asyncio.sleep(1.5 ** attempt)
 
         fetch_results = await asyncio.gather(*[_fetch_symbol(s) for s in watchlist])
+
+        # Fetch global sentiment once and inject into each symbol's market_data
+        try:
+            from app.services.sentiment_service import SentimentService
+            _svc = SentimentService()
+            _sdata = await _svc.get_sentiment_data()
+            _fng = _sdata["fear_greed_score"]
+            _trending = set(_sdata["trending_symbols"])
+        except Exception:
+            _fng, _trending = 0.0, set()
+
+        enriched = []
+        for _sym, _md in fetch_results:
+            if _md is not None:
+                _md["fng_score"] = _fng
+                _md["trending_symbols"] = sorted(_trending)
+                enriched.append((_sym, _md))
+
         opportunities = [
             self._heuristic_signal(symbol, market_data)
-            for symbol, market_data in fetch_results
-            if market_data is not None
+            for symbol, market_data in enriched
         ]
 
         if not opportunities:
@@ -774,10 +815,26 @@ class ScannerService:
                         await asyncio.sleep(1.5 ** attempt)
 
         fetch_results = await asyncio.gather(*[_fetch_symbol(s) for s in symbols])
+
+        try:
+            from app.services.sentiment_service import SentimentService
+            _svc = SentimentService()
+            _sdata = await _svc.get_sentiment_data()
+            _fng = _sdata["fear_greed_score"]
+            _trending = set(_sdata["trending_symbols"])
+        except Exception:
+            _fng, _trending = 0.0, set()
+
+        enriched = []
+        for _sym, _md in fetch_results:
+            if _md is not None:
+                _md["fng_score"] = _fng
+                _md["trending_symbols"] = sorted(_trending)
+                enriched.append((_sym, _md))
+
         opportunities = [
             self._heuristic_signal(symbol, market_data)
-            for symbol, market_data in fetch_results
-            if market_data is not None
+            for symbol, market_data in enriched
         ]
 
         if not opportunities:

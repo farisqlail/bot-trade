@@ -231,6 +231,40 @@ class TelegramService:
         )
         await self.send_message(text)
 
+    async def send_weekly_report(
+        self,
+        total_trades: int,
+        winning_trades: int,
+        losing_trades: int,
+        win_rate: float,
+        total_pnl: float,
+        best_trade: float,
+        worst_trade: float,
+        profit_factor: float,
+        sharpe_ratio: float,
+        max_drawdown: float,
+        start_date: str,
+        end_date: str,
+    ) -> None:
+        if not self.enabled:
+            return
+        emoji = "📈" if total_pnl >= 0 else "📉"
+        losing_trades_count = total_trades - winning_trades
+        text = (
+            f"📊 <b>Laporan Mingguan</b>\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"📅 {start_date} → {end_date}\n\n"
+            f"Total trade: <b>{total_trades}</b>  (✅ {winning_trades}  ❌ {losing_trades_count})\n"
+            f"Win rate: <code>{win_rate:.1f}%</code>\n"
+            f"Profit factor: <code>{profit_factor:.2f}</code>\n"
+            f"Sharpe ratio: <code>{sharpe_ratio:.2f}</code>\n"
+            f"Max drawdown: <code>{max_drawdown:.2f}%</code>\n\n"
+            f"{emoji} Total PnL: <code>${total_pnl:+.2f}</code>\n"
+            f"Best trade: <code>${best_trade:+.2f}</code>\n"
+            f"Worst trade: <code>${worst_trade:+.2f}</code>"
+        )
+        await self.send_message(text)
+
     async def notify_trade_closed(
         self, symbol: str, pnl: float, pnl_percent: float,
         exit_price: float, reason: str,

@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import { tradesApi } from '../services/api'
+import { useWsChannel } from '../hooks/useWsChannel'
 import clsx from 'clsx'
+
+const WS_CHANNELS = ['trades']
 
 export default function ActiveTrades() {
   const [trades, setTrades] = useState([])
@@ -8,22 +11,31 @@ export default function ActiveTrades() {
   const [closingId, setClosingId] = useState(null)
   const [closePrice, setClosePrice] = useState('')
 
+  // Initial load via REST
+  useEffect(() => {
+    tradesApi.getOpen()
+      .then((res) => setTrades(res.data))
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [])
+
+  // Real-time updates via WebSocket
+  const { data: wsData, status: wsStatus } = useWsChannel(WS_CHANNELS)
+
+  useEffect(() => {
+    if (wsData?.trades?.trades) {
+      setTrades(wsData.trades.trades)
+    }
+  }, [wsData?.trades])
+
   const fetchTrades = async () => {
     try {
       const res = await tradesApi.getOpen()
       setTrades(res.data)
     } catch (e) {
       console.error(e)
-    } finally {
-      setLoading(false)
     }
   }
-
-  useEffect(() => {
-    fetchTrades()
-    const interval = setInterval(fetchTrades, 15000)
-    return () => clearInterval(interval)
-  }, [])
 
   const handleClose = async (tradeId) => {
     if (!closePrice || isNaN(parseFloat(closePrice))) return
@@ -43,7 +55,19 @@ export default function ActiveTrades() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">Active Trades</h2>
-        <span className="text-sm text-gray-400">{trades.length} open</span>
+        <div className="flex items-center gap-3">
+          <span className={clsx(
+            'flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold',
+            wsStatus === 'connected' ? 'text-green-400 bg-green-400/10' : 'text-gray-500 bg-gray-800'
+          )}>
+            <span className={clsx(
+              'inline-block w-1.5 h-1.5 rounded-full',
+              wsStatus === 'connected' ? 'bg-green-400 animate-pulse' : 'bg-gray-600'
+            )} />
+            {wsStatus === 'connected' ? 'Live' : 'Offline'}
+          </span>
+          <span className="text-sm text-gray-400">{trades.length} open</span>
+        </div>
       </div>
 
       {trades.length === 0 ? (

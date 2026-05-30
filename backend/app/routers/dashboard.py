@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
 from app.database import get_db
@@ -7,7 +7,7 @@ from app.core.security import get_current_user_id
 from app.services.trading_service import TradingService
 from app.services.risk_service import RiskService
 from app.services.exchange_service import ExchangeService
-from app.schemas.dashboard import DashboardResponse, AccountMetrics, PnLMetrics, TradeMetrics, RiskStatus, BotStatus
+from app.schemas.dashboard import DashboardResponse, AccountMetrics, PnLMetrics, TradeMetrics, RiskStatus, BotStatus, PerformanceAnalytics
 from sqlalchemy import select
 from app.models.settings import Settings
 
@@ -89,3 +89,13 @@ async def get_dashboard(
         bot=bot,
         last_updated=datetime.now(timezone.utc),
     )
+
+
+@router.get("/performance", response_model=PerformanceAnalytics)
+async def get_performance(
+    days: int = Query(30, ge=7, le=365),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    trading_svc = TradingService(db)
+    return await trading_svc.get_performance_analytics(user_id, days=days)

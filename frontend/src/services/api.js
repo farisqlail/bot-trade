@@ -173,4 +173,12 @@ export const spotWatchlistApi = {
   getSignals: () => api.get('/spot-watchlist/signals'),
 }
 
+export const portfolioApi = {
+  get: () => api.get('/portfolio', { timeout: 20000 }),
+}
+
+export const sentimentApi = {
+  get: () => api.get('/sentiment', { timeout: 12000 }),
+}
+
 export default api

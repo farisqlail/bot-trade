@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { gmxApi } from '../services/api'
+import { useWsChannel } from '../hooks/useWsChannel'
 import {
   TrendingUp, TrendingDown, RefreshCw, AlertCircle, CheckCircle,
   Activity, DollarSign, Layers, ArrowUpRight, ArrowDownRight, Clock, X
@@ -97,7 +98,7 @@ export default function FuturesTrade() {
   const [leverage, setLeverage] = useState('')
   const [tradeLoading, setTradeLoading] = useState(false)
   const [tradeMsg, setTradeMsg] = useState(null)
-  const [closingSymbol, setClosingSymbol] = useState(null) // which position is being closed
+  const [closingSymbol, setClosingSymbol] = useState(null)
 
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -122,11 +123,19 @@ export default function FuturesTrade() {
     }
   }, [])
 
+  // Initial load — markets + logs are static, fetched once
+  useEffect(() => { fetchAll() }, [fetchAll])
+
+  // Real-time position + status updates via WebSocket
+  const { data: wsData, status: wsStatus } = useWsChannel(['gmx_positions'])
+
   useEffect(() => {
-    fetchAll()
-    const id = setInterval(() => fetchAll(true), 15000)
-    return () => clearInterval(id)
-  }, [fetchAll])
+    const ws = wsData?.gmx_positions
+    if (!ws) return
+    if (ws.positions) setPositions(ws.positions)
+    if (ws.gmx_enabled != null) setStatus((prev) => prev ? { ...prev, gmx_enabled: ws.gmx_enabled } : prev)
+    setLoading(false)
+  }, [wsData?.gmx_positions])
 
   const selectedMarket = markets.find(m => m.symbol === selectedSymbol)
 
@@ -190,6 +199,16 @@ export default function FuturesTrade() {
           </h1>
         </div>
         <div className="flex items-center gap-3">
+          <span className={clsx(
+            'flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold',
+            wsStatus === 'connected' ? 'text-green-400 bg-green-400/10' : 'text-gray-500 bg-gray-800'
+          )}>
+            <span className={clsx(
+              'inline-block w-1.5 h-1.5 rounded-full',
+              wsStatus === 'connected' ? 'bg-green-400 animate-pulse' : 'bg-gray-600'
+            )} />
+            {wsStatus === 'connected' ? 'Live' : 'Offline'}
+          </span>
           {status && (
             <span className={clsx(
               'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium',

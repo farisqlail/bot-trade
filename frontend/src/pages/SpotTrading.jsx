@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useWsChannel } from '../hooks/useWsChannel'
 import { useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
 import {
@@ -721,6 +722,8 @@ function ManualTPModal({ trade, onClose, onDone }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
+const SPOT_WS_CHANNELS = ['spot_signals']
+
 export default function SpotTrading() {
   const navigate = useNavigate()
   const [summary, setSummary] = useState(null)
@@ -736,8 +739,6 @@ export default function SpotTrading() {
   const [deleteId, setDeleteId] = useState(null)
   const [tokenDetail, setTokenDetail] = useState(null)       // null | signal item
   const [tpTrade, setTpTrade] = useState(null)               // null | trade object
-
-  const signalTimerRef = useRef(null)
 
   const fetchSummary = useCallback(async () => {
     try {
@@ -770,10 +771,16 @@ export default function SpotTrading() {
     fetchTrades()
   }, [fetchSummary, fetchSignals, fetchTrades])
 
+  // Real-time spot signals via WebSocket — replaces 60s polling
+  const { data: wsData } = useWsChannel(SPOT_WS_CHANNELS)
+
   useEffect(() => {
-    signalTimerRef.current = setInterval(fetchSignals, 60_000)
-    return () => clearInterval(signalTimerRef.current)
-  }, [fetchSignals])
+    const wsSignals = wsData?.spot_signals?.signals
+    if (wsSignals?.length) {
+      setSignals(wsSignals)
+      setLoadingSignals(false)
+    }
+  }, [wsData?.spot_signals])
 
   const handleWatchlistSaved = () => {
     setWatchlistModal(null)

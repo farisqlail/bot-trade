@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { gtradeApi, aiApi, bybitFuturesApi } from '../services/api'
+import { useWsChannel } from '../hooks/useWsChannel'
 import {
   Triangle, AlertCircle, RefreshCw, TrendingUp, TrendingDown,
   DollarSign, Activity, Wallet, ChevronDown, X, CheckCircle, Brain, Sparkles,
@@ -128,11 +129,19 @@ export default function GTradeFutures() {
     }
   }, [])
 
+  // Initial load — pairs + logs fetched once
+  useEffect(() => { fetchAll() }, [fetchAll])
+
+  // Real-time position + status updates via WebSocket
+  const { data: wsData, status: wsStatus } = useWsChannel(['gtrade_positions'])
+
   useEffect(() => {
-    fetchAll()
-    const timer = setInterval(fetchAll, 15000)
-    return () => clearInterval(timer)
-  }, [fetchAll])
+    const ws = wsData?.gtrade_positions
+    if (!ws) return
+    if (ws.positions) setPositions(ws.positions)
+    if (ws.gtrade_enabled != null) setStatus((prev) => prev ? { ...prev, gtrade_enabled: ws.gtrade_enabled } : prev)
+    setLoading(false)
+  }, [wsData?.gtrade_positions])
 
   const handleTrade = async (direction, overrideSymbol = null) => {
     if (!status?.gtrade_enabled) {
@@ -507,6 +516,16 @@ export default function GTradeFutures() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <span className={clsx(
+            'flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold',
+            wsStatus === 'connected' ? 'text-green-400 bg-green-400/10' : 'text-gray-500 bg-gray-800'
+          )}>
+            <span className={clsx(
+              'inline-block w-1.5 h-1.5 rounded-full',
+              wsStatus === 'connected' ? 'bg-green-400 animate-pulse' : 'bg-gray-600'
+            )} />
+            {wsStatus === 'connected' ? 'Live' : 'Offline'}
+          </span>
           {status && (
             <div className={clsx(
               'flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium',

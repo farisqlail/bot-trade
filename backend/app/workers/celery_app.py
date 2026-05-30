@@ -51,5 +51,9 @@ celery_app.conf.update(
             "task": "app.workers.tasks.check_spot_price_alerts",
             "schedule": 600.0,  # every 10 minutes
         },
+        "weekly-report": {
+            "task": "app.workers.tasks.send_weekly_report",
+            "schedule": crontab(hour=8, minute=0, day_of_week=1),  # every Monday 08:00 UTC
+        },
     },
 )

@@ -539,3 +539,108 @@ class Settings(Base):
         except (TypeError, ValueError):
             payload["min_volume_filter"] = 5_000_000.0
         self.notification_settings = payload
+
+    # --- Position Sizing Method ---
+
+    @property
+    def position_sizing_method(self) -> str:
+        val = (self.notification_settings or {}).get("position_sizing_method", "fixed")
+        return val if val in {"fixed", "kelly"} else "fixed"
+
+    @position_sizing_method.setter
+    def position_sizing_method(self, value: str):
+        payload = dict(self.notification_settings or {})
+        payload["position_sizing_method"] = value if value in {"fixed", "kelly"} else "fixed"
+        self.notification_settings = payload
+
+    @property
+    def kelly_fraction(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("kelly_fraction", 0.25))
+        except (TypeError, ValueError):
+            return 0.25
+
+    @kelly_fraction.setter
+    def kelly_fraction(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["kelly_fraction"] = max(0.1, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            payload["kelly_fraction"] = 0.25
+        self.notification_settings = payload
+
+    # --- Trailing Stop Loss ---
+
+    @property
+    def trailing_sl_enabled(self) -> bool:
+        return bool((self.notification_settings or {}).get("trailing_sl_enabled", False))
+
+    @trailing_sl_enabled.setter
+    def trailing_sl_enabled(self, value: bool):
+        payload = dict(self.notification_settings or {})
+        payload["trailing_sl_enabled"] = bool(value)
+        self.notification_settings = payload
+
+    @property
+    def trailing_sl_percent(self) -> float:
+        try:
+            return float((self.notification_settings or {}).get("trailing_sl_percent", 1.5))
+        except (TypeError, ValueError):
+            return 1.5
+
+    @trailing_sl_percent.setter
+    def trailing_sl_percent(self, value: float):
+        payload = dict(self.notification_settings or {})
+        try:
+            payload["trailing_sl_percent"] = max(0.1, min(20.0, float(value)))
+        except (TypeError, ValueError):
+            payload["trailing_sl_percent"] = 1.5
+        self.notification_settings = payload
+
+    @property
+    def trailing_peak_prices(self) -> dict:
+        """Peak prices for Bybit real trades: {str(trade_id): peak_price}."""
+        raw = (self.notification_settings or {}).get("trailing_peak_prices", {})
+        return raw if isinstance(raw, dict) else {}
+
+    @trailing_peak_prices.setter
+    def trailing_peak_prices(self, value: dict):
+        payload = dict(self.notification_settings or {})
+        payload["trailing_peak_prices"] = value if isinstance(value, dict) else {}
+        self.notification_settings = payload
+
+    @property
+    def defi_peak_prices(self) -> dict:
+        """Peak prices for DeFi held tokens: {symbol: peak_price}."""
+        raw = (self.notification_settings or {}).get("defi_peak_prices", {})
+        return raw if isinstance(raw, dict) else {}
+
+    @defi_peak_prices.setter
+    def defi_peak_prices(self, value: dict):
+        payload = dict(self.notification_settings or {})
+        payload["defi_peak_prices"] = value if isinstance(value, dict) else {}
+        self.notification_settings = payload
+
+    @property
+    def gmx_peak_prices(self) -> dict:
+        """Peak prices for GMX open positions: {symbol: peak_price}."""
+        raw = (self.notification_settings or {}).get("gmx_peak_prices", {})
+        return raw if isinstance(raw, dict) else {}
+
+    @gmx_peak_prices.setter
+    def gmx_peak_prices(self, value: dict):
+        payload = dict(self.notification_settings or {})
+        payload["gmx_peak_prices"] = value if isinstance(value, dict) else {}
+        self.notification_settings = payload
+
+    @property
+    def paper_peak_prices(self) -> dict:
+        """Peak prices for paper trades: {str(trade_id): peak_price}."""
+        raw = (self.notification_settings or {}).get("paper_peak_prices", {})
+        return raw if isinstance(raw, dict) else {}
+
+    @paper_peak_prices.setter
+    def paper_peak_prices(self, value: dict):
+        payload = dict(self.notification_settings or {})
+        payload["paper_peak_prices"] = value if isinstance(value, dict) else {}
+        self.notification_settings = payload

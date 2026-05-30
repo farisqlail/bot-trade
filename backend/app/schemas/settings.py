@@ -50,6 +50,8 @@ class SettingsUpdate(BaseModel):
     bybit_collateral_percent: Optional[float] = None
     bybit_sl_percent: Optional[float] = None
     continuous_scan_enabled: Optional[bool] = None
+    position_sizing_method: Optional[str] = None
+    kelly_fraction: Optional[float] = None
 
 
 class SettingsResponse(BaseModel):
@@ -99,5 +101,7 @@ class SettingsResponse(BaseModel):
     bybit_collateral_percent: float = 10.0
     bybit_sl_percent: float = 3.0
     continuous_scan_enabled: bool = True
+    position_sizing_method: str = "fixed"
+    kelly_fraction: float = 0.25
 
     model_config = {"from_attributes": True}
