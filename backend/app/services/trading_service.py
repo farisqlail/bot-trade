@@ -157,7 +157,7 @@ class TradingService:
         else:
             pnl = (trade.entry_price - exit_price) * trade.quantity * trade.leverage
 
-        pnl_percent = (pnl / trade.risk_amount) * 100
+        pnl_percent = (pnl / trade.risk_amount) * 100 if trade.risk_amount else 0.0
 
         trade.exit_price = exit_price
         trade.pnl = round(pnl, 2)

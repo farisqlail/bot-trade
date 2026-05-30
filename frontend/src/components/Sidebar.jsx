@@ -3,7 +3,7 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, History, Brain, ShieldCheck,
   Settings2, LogOut, Zap, BarChart2, Layers, Triangle, Rocket,
-  ChevronDown, ScanSearch, Boxes, PieChart
+  ChevronDown, ScanSearch, Boxes, PieChart, FlaskConical
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -19,6 +19,7 @@ const SCAN_ITEMS = [
   { path: '/ai-analysis', label: 'AI Analysis', icon: Brain },
   { path: '/altcoins', label: 'Altcoin Scanner', icon: Rocket },
   { path: '/chart', label: 'Smart Chart', icon: BarChart2 },
+  { path: '/backtest', label: 'Backtest', icon: FlaskConical },
 ]
 
 const FUTURES_ITEMS = [

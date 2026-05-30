@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel
 from app.database import get_db
@@ -143,7 +143,7 @@ async def create_spot_trade(
         price_at_trade=body.price_at_trade,
         price_target=body.price_target,
         notes=body.notes,
-        opened_at=datetime.utcnow(),
+        opened_at=datetime.now(timezone.utc),
     )
     db.add(trade)
     await db.commit()
@@ -184,7 +184,7 @@ async def update_spot_trade(
         setattr(trade, field, value)
 
     if body.status == SpotTradeStatus.COMPLETED and not trade.closed_at:
-        trade.closed_at = datetime.utcnow()
+        trade.closed_at = datetime.now(timezone.utc)
 
     await db.commit()
     await db.refresh(trade)

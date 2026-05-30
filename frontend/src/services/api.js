@@ -173,6 +173,10 @@ export const spotWatchlistApi = {
   getSignals: () => api.get('/spot-watchlist/signals'),
 }
 
+export const backtestApi = {
+  run: (params) => api.get('/backtest', { params, timeout: 60000 }),
+}
+
 export const portfolioApi = {
   get: () => api.get('/portfolio', { timeout: 20000 }),
 }

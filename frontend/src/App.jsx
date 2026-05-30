@@ -12,6 +12,7 @@ import GTradeFutures from './pages/GTradeFutures'
 import AltcoinScanner from './pages/AltcoinScanner'
 import SpotTrading from './pages/SpotTrading'
 import Portfolio from './pages/Portfolio'
+import Backtest from './pages/Backtest'
 import Login from './pages/Login'
 import Register from './pages/Register'
 
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="altcoins" element={<AltcoinScanner />} />
           <Route path="spot" element={<SpotTrading />} />
           <Route path="portfolio" element={<Portfolio />} />
+          <Route path="backtest" element={<Backtest />} />
         </Route>
       </Routes>
     </BrowserRouter>

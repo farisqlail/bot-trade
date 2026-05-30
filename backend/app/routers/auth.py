@@ -61,6 +61,7 @@ async def login(login_data: UserLogin, db: AsyncSession = Depends(get_db)):
     if not user or not verify_password(login_data.password, user.hashed_password):
         if user:
             user.failed_login_attempts += 1
+            await db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not user.is_active:
@@ -71,6 +72,7 @@ async def login(login_data: UserLogin, db: AsyncSession = Depends(get_db)):
 
     user.failed_login_attempts = 0
     user.last_login = datetime.now(timezone.utc)
+    await db.commit()
 
     token_data = {"sub": str(user.id)}
     return TokenResponse(

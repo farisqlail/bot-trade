@@ -260,6 +260,7 @@ def check_stop_loss_take_profit(self):
                     new_balance = None
                     if _s and _s.paper_balance is not None:
                         new_balance = round(_s.paper_balance + (closed.pnl or 0.0), 2)
+                        _s.paper_balance = new_balance
                     await TelegramService().notify_trade_closed(
                         symbol=closed.symbol,
                         pnl=closed.pnl or 0.0,
