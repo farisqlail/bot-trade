@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     LOG_FILE: str = "/var/log/tradingbot/app.log"
 
     CORS_ORIGINS: Union[List[str], str] = ["http://localhost:3000"]
+    ALLOWED_HOSTS: Union[List[str], str] = ["*"]
     RATE_LIMIT_PER_MINUTE: int = 60
     MAX_LOGIN_ATTEMPTS: int = 5
 
@@ -68,8 +69,8 @@ class Settings(BaseSettings):
     TELEGRAM_WEBHOOK_URL: str = ""
     TELEGRAM_WEBHOOK_SECRET: str = ""
 
-    @validator("CORS_ORIGINS", pre=True)
-    def parse_cors_origins(cls, v):
+    @validator("CORS_ORIGINS", "ALLOWED_HOSTS", pre=True, each_item=False)
+    def parse_list_setting(cls, v):
         if isinstance(v, str):
             try:
                 return json.loads(v)

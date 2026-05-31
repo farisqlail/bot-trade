@@ -36,11 +36,6 @@ async def get_dashboard(
     pnl_data = await trading_svc.get_pnl_by_period(user_id)
     risk_data = await risk_svc.get_risk_status(user_id, balance)
 
-    open_trades = await trading_svc.get_open_trades(user_id)
-    unrealized_pnl = sum(
-        0.0 for t in open_trades
-    )
-
     account = AccountMetrics(
         balance=account_data["balance"],
         equity=account_data["equity"],

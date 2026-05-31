@@ -55,7 +55,7 @@ app.add_middleware(
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["*"] if settings.DEBUG else settings.ALLOWED_HOSTS if hasattr(settings, "ALLOWED_HOSTS") else ["*"],
+    allowed_hosts=["*"] if settings.DEBUG else settings.ALLOWED_HOSTS,
 )
 
 API_PREFIX = settings.API_V1_STR

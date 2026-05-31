@@ -19,6 +19,8 @@ async def telegram_webhook(
         if secret != settings.TELEGRAM_WEBHOOK_SECRET:
             logger.warning("telegram_webhook_invalid_secret", ip=request.client.host if request.client else "unknown")
             raise HTTPException(status_code=403, detail="Invalid webhook secret")
+    else:
+        logger.warning("telegram_webhook_no_secret_configured_open_endpoint")
 
     try:
         body = await request.json()

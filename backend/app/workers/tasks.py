@@ -6,6 +6,32 @@ from app.utils.crypto import safe_decrypt as _safe_decrypt
 logger = get_logger(__name__)
 
 
+def _calc_trailing_peak(
+    peaks: dict,
+    key: str,
+    current_price: float,
+    entry_price: float,
+    trail_pct: float,
+    is_long: bool,
+) -> tuple[dict, float, float, bool]:
+    """
+    Update trailing peak and compute new stop-loss price.
+    Returns (updated_peaks, new_peak, new_trail_sl, peak_changed).
+    peaks dict is copied only when the peak actually moves.
+    """
+    current_peak = float(peaks.get(key, entry_price if entry_price > 0 else current_price))
+    if is_long:
+        new_peak = max(current_peak, current_price)
+        new_trail_sl = new_peak * (1.0 - trail_pct)
+    else:
+        new_peak = min(current_peak, current_price) if current_peak > 0 else current_price
+        new_trail_sl = new_peak * (1.0 + trail_pct)
+    peak_changed = new_peak != current_peak
+    if peak_changed:
+        peaks = {**peaks, key: new_peak}
+    return peaks, new_peak, new_trail_sl, peak_changed
+
+
 def run_async(coro):
     loop = asyncio.new_event_loop()
     try:
@@ -217,27 +243,17 @@ def check_stop_loss_take_profit(self):
                 _s = await _get_user_settings(trade.user_id)
                 is_long = trade.direction == TradeDirection.LONG
 
-                # Trailing SL: update virtual stop_loss in trade object
                 if _s and _s.trailing_sl_enabled and price > 0:
                     trail_pct = _s.trailing_sl_percent / 100.0
-                    paper_peaks = dict(_s.paper_peak_prices)
-                    peak_key = str(trade.id)
-                    current_peak = float(paper_peaks.get(peak_key, trade.entry_price))
-
-                    if is_long:
-                        new_peak = max(current_peak, price)
-                        new_trail_sl = new_peak * (1.0 - trail_pct)
-                        if new_trail_sl > trade.stop_loss and new_peak > trade.entry_price:
-                            trade.stop_loss = new_trail_sl
-                    else:
-                        new_peak = min(current_peak, price) if current_peak > 0 else price
-                        new_trail_sl = new_peak * (1.0 + trail_pct)
-                        if 0 < new_trail_sl < trade.stop_loss and new_peak < trade.entry_price:
-                            trade.stop_loss = new_trail_sl
-
-                    if new_peak != current_peak:
-                        paper_peaks[peak_key] = new_peak
-                        _s.paper_peak_prices = paper_peaks
+                    updated_peaks, new_peak, new_trail_sl, peak_changed = _calc_trailing_peak(
+                        dict(_s.paper_peak_prices), str(trade.id), price, trade.entry_price, trail_pct, is_long
+                    )
+                    if is_long and new_trail_sl > trade.stop_loss and new_peak > trade.entry_price:
+                        trade.stop_loss = new_trail_sl
+                    elif not is_long and 0 < new_trail_sl < trade.stop_loss and new_peak < trade.entry_price:
+                        trade.stop_loss = new_trail_sl
+                    if peak_changed:
+                        _s.paper_peak_prices = updated_peaks
 
                 if is_long:
                     hit_sl = price <= trade.stop_loss
@@ -356,12 +372,13 @@ def monitor_bybit_positions(self):
             tg = TelegramService()
 
             for trade in real_trades:
-                # Get API keys for this user
                 s_result = await db.execute(select(Settings).where(Settings.user_id == trade.user_id))
                 s = s_result.scalar_one_or_none()
+                if not s:
+                    continue
                 _api_key = _safe_decrypt(s.polymarket_api_key)
                 _api_secret = _safe_decrypt(s.polymarket_api_secret)
-                if not s or not _api_key or not _api_secret:
+                if not _api_key or not _api_secret:
                     continue
 
                 order_svc = BybitOrderService(
@@ -390,7 +407,7 @@ def monitor_bybit_positions(self):
                         exit_price = trade.entry_price
 
                     pnl_mult = 1 if trade.direction == TradeDirection.LONG else -1
-                    pnl_pct = pnl_mult * (exit_price - trade.entry_price) / trade.entry_price * 100 * trade.leverage
+                    pnl_pct = pnl_mult * (exit_price - trade.entry_price) / trade.entry_price * 100 * trade.leverage if trade.entry_price else 0.0
                     pnl_usd = trade.risk_amount * pnl_pct / 100 if trade.risk_amount else 0.0
 
                     trade.status = TradeStatus.CLOSED
@@ -419,15 +436,8 @@ def monitor_bybit_positions(self):
                 except Exception:
                     continue
 
-                candles = market_data.get("candles") or []
+                from app.services.scanner_service import compute_signal_score
                 current_price = float(market_data.get("price") or 0.0)
-                if len(candles) >= 2 and candles[0].get("close"):
-                    momentum = (candles[-1]["close"] - candles[0]["close"]) / candles[0]["close"]
-                else:
-                    momentum = 0.0
-                change_score = float(market_data.get("change_24h") or 0.0) / 100.0
-                polymarket_score = float(market_data.get("polymarket_bias_score") or 0.0)
-                polymarket_count = int(market_data.get("polymarket_market_count") or 0)
                 try:
                     from app.services.sentiment_service import SentimentService
                     _ss = SentimentService()
@@ -435,13 +445,7 @@ def monitor_bybit_positions(self):
                     _trending = await _ss.get_trending_symbols()
                 except Exception:
                     _fng, _trending = 0.0, set()
-                base_sym = trade.symbol.replace("USDT", "").replace("USDC", "").upper()
-                _trending_bonus = 0.10 if base_sym in _trending else 0.0
-                if polymarket_count > 0:
-                    sentiment_score = polymarket_score * 0.50 + _fng * 0.35 + _trending_bonus * 0.15
-                else:
-                    sentiment_score = _fng * 0.85 + _trending_bonus * 0.15
-                score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
+                score = compute_signal_score(trade.symbol, market_data, fng_score=_fng, trending_symbols=_trending)
 
                 is_long = trade.direction == TradeDirection.LONG
                 # Signal flip: LONG + bearish signal, or SHORT + bullish signal
@@ -449,22 +453,12 @@ def monitor_bybit_positions(self):
                 if not signal_flip:
                     if current_price and trade.entry_price:
                         if s.trailing_sl_enabled:
-                            # Trailing SL: track peak price and keep SL at (peak - trail_pct)
                             trail_pct = s.trailing_sl_percent / 100.0
-                            peaks = dict(s.trailing_peak_prices)
-                            peak_key = str(trade.id)
-                            current_peak = float(peaks.get(peak_key, trade.entry_price))
-
-                            if is_long:
-                                new_peak = max(current_peak, current_price)
-                                new_trail_sl = new_peak * (1.0 - trail_pct)
-                            else:
-                                new_peak = min(current_peak, current_price) if current_peak > 0 else current_price
-                                new_trail_sl = new_peak * (1.0 + trail_pct)
-
-                            if new_peak != current_peak:
-                                peaks[peak_key] = new_peak
-                                s.trailing_peak_prices = peaks
+                            updated_peaks, new_peak, new_trail_sl, peak_changed = _calc_trailing_peak(
+                                dict(s.trailing_peak_prices), str(trade.id), current_price, trade.entry_price, trail_pct, is_long
+                            )
+                            if peak_changed:
+                                s.trailing_peak_prices = updated_peaks
 
                             current_sl = float(bybit_pos.get("stopLoss") or 0)
                             should_update = (
@@ -483,7 +477,7 @@ def monitor_bybit_positions(self):
                                     logger.warning("bybit_monitor_trailing_sl_failed", symbol=trade.symbol, error=str(exc))
                         else:
                             # Fallback: move SL to breakeven when profit >= 1.5%
-                            profit_pct = (current_price - trade.entry_price) / trade.entry_price * (1 if is_long else -1) * 100
+                            profit_pct = (current_price - trade.entry_price) / trade.entry_price * (1 if is_long else -1) * 100 if trade.entry_price else 0.0
                             if profit_pct >= 1.5 and trade.stop_loss:
                                 be_sl = trade.entry_price * (1.001 if is_long else 0.999)
                                 current_sl = float(bybit_pos.get("stopLoss") or 0)
@@ -513,7 +507,7 @@ def monitor_bybit_positions(self):
                 try:
                     await order_svc.close_position(symbol=trade.symbol, side=side, qty=str(qty))
                     pnl_mult = 1 if is_long else -1
-                    pnl_pct = pnl_mult * (current_price - trade.entry_price) / trade.entry_price * 100 * trade.leverage
+                    pnl_pct = pnl_mult * (current_price - trade.entry_price) / trade.entry_price * 100 * trade.leverage if trade.entry_price else 0.0
                     pnl_usd = trade.risk_amount * pnl_pct / 100 if trade.risk_amount else 0.0
                     trade.status = TradeStatus.CLOSED
                     trade.exit_price = current_price
@@ -596,15 +590,9 @@ def monitor_defi_positions(self):
                             logger.warning("defi_monitor_market_data_failed", symbol=symbol, network=network, error=str(exc))
                             continue
 
-                        candles = market_data.get("candles") or []
+                        from app.services.scanner_service import compute_signal_score
                         current_price = float(market_data.get("price") or 0.0)
-                        if len(candles) >= 2 and candles[0].get("close"):
-                            momentum = (candles[-1]["close"] - candles[0]["close"]) / candles[0]["close"]
-                        else:
-                            momentum = 0.0
-                        change_score = float(market_data.get("change_24h") or 0.0) / 100.0
-                        sentiment_score = float(market_data.get("polymarket_bias_score") or 0.0)
-                        score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
+                        score = compute_signal_score(symbol, market_data)
 
                         # Stop-loss check: static and trailing
                         entry_prices = s.defi_entry_prices
@@ -616,17 +604,15 @@ def monitor_defi_positions(self):
                             and current_price <= entry_price * (1.0 - sl_pct)
                         )
 
-                        # Trailing SL for DeFi: track peak price, exit if drops trail_pct from peak
                         is_trailing_sl = False
                         if not is_stop_loss and s.trailing_sl_enabled and current_price > 0:
                             trail_pct = s.trailing_sl_percent / 100.0
-                            defi_peaks = dict(s.defi_peak_prices)
-                            current_peak = float(defi_peaks.get(symbol, entry_price if entry_price > 0 else current_price))
-                            new_peak = max(current_peak, current_price)
-                            if new_peak != current_peak:
-                                defi_peaks[symbol] = new_peak
-                                s.defi_peak_prices = defi_peaks
-                            if current_price <= new_peak * (1.0 - trail_pct) and new_peak > entry_price:
+                            updated_peaks, new_peak, new_trail_sl, peak_changed = _calc_trailing_peak(
+                                dict(s.defi_peak_prices), symbol, current_price, entry_price, trail_pct, is_long=True
+                            )
+                            if peak_changed:
+                                s.defi_peak_prices = updated_peaks
+                            if current_price <= new_trail_sl and new_peak > entry_price:
                                 is_trailing_sl = True
                                 loss_from_peak = (new_peak - current_price) / new_peak * 100
 
@@ -880,6 +866,9 @@ def monitor_gmx_positions(self):
                     if current_price <= 0:
                         continue
 
+                    if not entry_price:
+                        continue
+
                     # Static stop-loss check
                     if is_long:
                         is_sl = current_price <= entry_price * (1.0 - sl_pct)
@@ -888,30 +877,21 @@ def monitor_gmx_positions(self):
                         is_sl = current_price >= entry_price * (1.0 + sl_pct)
                         loss_pct = (current_price - entry_price) / entry_price * 100
 
-                    # Trailing SL for GMX
                     is_trailing_sl = False
                     trailing_loss_pct = 0.0
                     if not is_sl and s.trailing_sl_enabled and current_price > 0:
                         trail_pct = s.trailing_sl_percent / 100.0
-                        gmx_peaks = dict(s.gmx_peak_prices)
-                        if is_long:
-                            current_peak = float(gmx_peaks.get(symbol, entry_price))
-                            new_peak = max(current_peak, current_price)
-                            if new_peak != current_peak:
-                                gmx_peaks[symbol] = new_peak
-                                s.gmx_peak_prices = gmx_peaks
-                            if current_price <= new_peak * (1.0 - trail_pct) and new_peak > entry_price:
-                                is_trailing_sl = True
-                                trailing_loss_pct = (new_peak - current_price) / new_peak * 100
-                        else:
-                            current_peak = float(gmx_peaks.get(symbol, entry_price))
-                            new_peak = min(current_peak, current_price) if current_peak > 0 else current_price
-                            if new_peak != current_peak:
-                                gmx_peaks[symbol] = new_peak
-                                s.gmx_peak_prices = gmx_peaks
-                            if current_price >= new_peak * (1.0 + trail_pct) and new_peak < entry_price:
-                                is_trailing_sl = True
-                                trailing_loss_pct = (current_price - new_peak) / new_peak * 100
+                        updated_gmx_peaks, new_peak, new_trail_sl, peak_changed = _calc_trailing_peak(
+                            dict(s.gmx_peak_prices), symbol, current_price, entry_price, trail_pct, is_long
+                        )
+                        if peak_changed:
+                            s.gmx_peak_prices = updated_gmx_peaks
+                        if is_long and current_price <= new_trail_sl and new_peak > entry_price:
+                            is_trailing_sl = True
+                            trailing_loss_pct = (new_peak - current_price) / new_peak * 100
+                        elif not is_long and current_price >= new_trail_sl and new_peak < entry_price:
+                            is_trailing_sl = True
+                            trailing_loss_pct = (current_price - new_peak) / new_peak * 100
 
                     if not is_sl and not is_trailing_sl:
                         logger.info(

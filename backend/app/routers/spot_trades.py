@@ -78,7 +78,7 @@ async def get_stats_summary(
         }
 
     completed = [t for t in trades if t.status == SpotTradeStatus.COMPLETED and t.pnl is not None]
-    active = [t for t in trades if t.status == SpotTradeStatus.COMPLETED]
+    active = [t for t in trades if t.status == SpotTradeStatus.PENDING]
     total_invested = sum(t.amount_in for t in active)
     total_pnl = sum(t.pnl for t in completed)
     current_value = total_invested + total_pnl

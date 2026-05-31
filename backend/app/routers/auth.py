@@ -86,7 +86,10 @@ async def refresh_token(request: RefreshTokenRequest):
     payload = decode_token(request.refresh_token)
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid token type")
-    token_data = {"sub": payload["sub"]}
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    token_data = {"sub": sub}
     return TokenResponse(
         access_token=create_access_token(token_data),
         refresh_token=create_refresh_token(token_data),

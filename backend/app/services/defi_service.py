@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Optional
 
@@ -121,6 +122,42 @@ UNISWAP_V3_FACTORY = {
     "ethereum": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
 }
 
+QUOTER_V2: dict[str, str] = {
+    "arbitrum": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+    "optimism": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+    "base":     "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
+    "polygon":  "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+    "ethereum": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+    # BSC: no standard Uniswap V3 quoter
+}
+
+QUOTER_V2_ABI = [
+    {
+        "inputs": [
+            {
+                "components": [
+                    {"name": "tokenIn",           "type": "address"},
+                    {"name": "tokenOut",          "type": "address"},
+                    {"name": "amountIn",          "type": "uint256"},
+                    {"name": "fee",               "type": "uint24"},
+                    {"name": "sqrtPriceLimitX96", "type": "uint160"},
+                ],
+                "name": "params",
+                "type": "tuple",
+            }
+        ],
+        "name": "quoteExactInputSingle",
+        "outputs": [
+            {"name": "amountOut",                "type": "uint256"},
+            {"name": "sqrtPriceX96After",        "type": "uint160"},
+            {"name": "initializedTicksCrossed",  "type": "uint32"},
+            {"name": "gasEstimate",              "type": "uint256"},
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    }
+]
+
 FACTORY_ABI = [
     {
         "inputs": [
@@ -232,6 +269,30 @@ class DeFiService:
         self.network = network
         self.net = NETWORKS.get(network) or NETWORKS["arbitrum"]
         self.w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(self.net["rpc"]))
+
+    async def _quote_exact_input_single(
+        self, token_in: str, token_out: str, amount_in: int, fee: int
+    ) -> int:
+        """Returns expected amountOut from QuoterV2. Returns 0 if quoter unavailable or fails."""
+        quoter_addr = QUOTER_V2.get(self.network)
+        if not quoter_addr:
+            return 0
+        try:
+            quoter = self.w3.eth.contract(
+                address=Web3.to_checksum_address(quoter_addr),
+                abi=QUOTER_V2_ABI,
+            )
+            result = await quoter.functions.quoteExactInputSingle({
+                "tokenIn":           Web3.to_checksum_address(token_in),
+                "tokenOut":          Web3.to_checksum_address(token_out),
+                "amountIn":          amount_in,
+                "fee":               fee,
+                "sqrtPriceLimitX96": 0,
+            }).call()
+            return result[0]
+        except Exception as exc:
+            logger.warning("quoter_failed", network=self.network, error=str(exc))
+            return 0
 
     async def get_balance(self, wallet_address: str) -> dict:
         addr = Web3.to_checksum_address(wallet_address)
@@ -444,11 +505,16 @@ class DeFiService:
         tx["gas"] = int(gas * 1.3)
         signed = Account.sign_transaction(tx, private_key)
         tx_hash = await self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        # Brief wait for approve only — swap nonce depends on it being mined
         try:
-            await self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=45)
-        except Exception:
-            pass  # proceed with swap even if receipt times out
+            receipt = await self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=45)
+            if receipt.get("status") == 0:
+                raise ValueError(f"Approve transaction reverted: {tx_hash.hex()}")
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning("approve_receipt_timeout", tx=tx_hash.hex())
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.warning("approve_receipt_wait_error", tx=tx_hash.hex(), error=str(exc))
         return tx_hash
 
     async def swap_usdc_to_token(
@@ -493,6 +559,12 @@ class DeFiService:
         nonce = await self.w3.eth.get_transaction_count(wallet_addr)
         gas_price = int((await self.w3.eth.gas_price) * 1.3)
 
+        # Quote expected output and apply slippage protection
+        expected_out = await self._quote_exact_input_single(usdc_addr, token_addr, amount_in, fee)
+        amount_out_minimum = int(expected_out * (1 - slippage)) if expected_out > 0 else 0
+        if amount_out_minimum == 0:
+            logger.warning("defi_swap_buy_no_quote_zero_min_out", network=self.network, token=token_addr)
+
         await self._approve(private_key, usdc_addr, router_addr, amount_in, nonce, gas_price)
 
         router = self.w3.eth.contract(address=router_addr, abi=SWAP_ROUTER_ABI)
@@ -505,7 +577,7 @@ class DeFiService:
             single_fn = router.functions.exactInputSingle({
                 "tokenIn": usdc_addr, "tokenOut": token_addr, "fee": fee,
                 "recipient": wallet_addr, "amountIn": amount_in,
-                "amountOutMinimum": 0, "sqrtPriceLimitX96": 0,
+                "amountOutMinimum": amount_out_minimum, "sqrtPriceLimitX96": 0,
             })
             try:
                 await single_fn.estimate_gas({**base_tx, "gas": 400000})
@@ -524,7 +596,7 @@ class DeFiService:
             swap_tx = await router.functions.exactInputSingle({
                 "tokenIn": usdc_addr, "tokenOut": token_addr, "fee": fee,
                 "recipient": wallet_addr, "amountIn": amount_in,
-                "amountOutMinimum": 0, "sqrtPriceLimitX96": 0,
+                "amountOutMinimum": amount_out_minimum, "sqrtPriceLimitX96": 0,
             }).build_transaction({**base_tx, "gas": 300000})
 
         signed = Account.sign_transaction(swap_tx, private_key)
@@ -564,6 +636,12 @@ class DeFiService:
         nonce = await self.w3.eth.get_transaction_count(wallet_addr)
         gas_price = int((await self.w3.eth.gas_price) * 1.3)
 
+        # Quote expected USDC output and apply slippage protection
+        expected_usdc = await self._quote_exact_input_single(token_addr, usdc_addr, token_balance, fee)
+        amount_out_minimum = int(expected_usdc * (1 - slippage)) if expected_usdc > 0 else 0
+        if amount_out_minimum == 0:
+            logger.warning("defi_swap_sell_no_quote_zero_min_out", network=self.network, token=token_addr)
+
         await self._approve(private_key, token_addr, router_addr, token_balance, nonce, gas_price)
 
         router = self.w3.eth.contract(address=router_addr, abi=SWAP_ROUTER_ABI)
@@ -575,7 +653,7 @@ class DeFiService:
         single_fn = router.functions.exactInputSingle({
             "tokenIn": token_addr, "tokenOut": usdc_addr, "fee": fee,
             "recipient": wallet_addr, "amountIn": token_balance,
-            "amountOutMinimum": 0, "sqrtPriceLimitX96": 0,
+            "amountOutMinimum": amount_out_minimum, "sqrtPriceLimitX96": 0,
         })
         try:
             await single_fn.estimate_gas({**base_tx, "gas": 400000})

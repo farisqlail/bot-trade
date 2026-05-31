@@ -16,6 +16,42 @@ from app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def compute_signal_score(
+    symbol: str,
+    market_data: dict,
+    fng_score: float = 0.0,
+    trending_symbols: set | None = None,
+) -> float:
+    """
+    Compute composite signal score from market data.
+    fng_score and trending_symbols override values in market_data when provided.
+    """
+    if trending_symbols is None:
+        trending_symbols = set()
+
+    candles = market_data.get("candles") or []
+    if len(candles) >= 2 and candles[0].get("close"):
+        momentum = (candles[-1]["close"] - candles[0]["close"]) / candles[0]["close"]
+    else:
+        momentum = 0.0
+
+    change_score = float(market_data.get("change_24h") or 0.0) / 100.0
+    polymarket_score = float(market_data.get("polymarket_bias_score") or 0.0)
+    polymarket_count = int(market_data.get("polymarket_market_count") or 0)
+
+    _fng = fng_score or float(market_data.get("fng_score") or 0.0)
+    _trending = trending_symbols or set(market_data.get("trending_symbols") or [])
+    base_sym = symbol.replace("USDT", "").replace("USDC", "").upper()
+    trending_bonus = 0.10 if base_sym in _trending else 0.0
+
+    if polymarket_count > 0:
+        sentiment_score = polymarket_score * 0.50 + _fng * 0.35 + trending_bonus * 0.15
+    else:
+        sentiment_score = _fng * 0.85 + trending_bonus * 0.15
+
+    return (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
+
+
 class ScannerService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -28,28 +64,27 @@ class ScannerService:
         return result.scalar_one_or_none()
 
     def _heuristic_signal(self, symbol: str, market_data: dict) -> dict:
-        candles = market_data.get("candles") or []
         current_price = float(market_data.get("price") or 0.0)
-        if len(candles) >= 2 and candles[0]["close"]:
+        score = compute_signal_score(symbol, market_data)
+
+        # Still needed for analysis_text
+        candles = market_data.get("candles") or []
+        if len(candles) >= 2 and candles[0].get("close"):
             momentum = (candles[-1]["close"] - candles[0]["close"]) / candles[0]["close"]
         else:
             momentum = 0.0
-
         change_score = float(market_data.get("change_24h") or 0.0) / 100.0
 
-        # Composite sentiment: Polymarket + Fear&Greed + CoinGecko trending
-        polymarket_score = float(market_data.get("polymarket_bias_score") or 0.0)
-        polymarket_count = int(market_data.get("polymarket_market_count") or 0)
         fng_score = float(market_data.get("fng_score") or 0.0)
         trending_syms = set(market_data.get("trending_symbols") or [])
         base_sym = symbol.replace("USDT", "").replace("USDC", "").upper()
+        polymarket_score = float(market_data.get("polymarket_bias_score") or 0.0)
+        polymarket_count = int(market_data.get("polymarket_market_count") or 0)
         trending_bonus = 0.10 if base_sym in trending_syms else 0.0
         if polymarket_count > 0:
             sentiment_score = polymarket_score * 0.50 + fng_score * 0.35 + trending_bonus * 0.15
         else:
             sentiment_score = fng_score * 0.85 + trending_bonus * 0.15
-
-        score = (momentum * 0.45) + (change_score * 0.25) + (sentiment_score * 0.30)
 
         if score >= 0.001:
             action = "BUY"
